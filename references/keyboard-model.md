@@ -1,177 +1,171 @@
-# Клавиатурная модель
+# Keyboard model
 
-Содержание: 1. Принципы. 2. Эталонная раскладка (сетка параметров).
-3. Главный экран и списки. 4. Модальные экраны и страницы. 5. Поиск по
-букве. 6. Конфликты с REAPER и NVDA. 7. Особенности клавиш JUCE.
-8. Маршрутизация клавиш в коде.
+Contents: 1. Principles. 2. Reference layout: parameter grid. 3. Simple editors.
+4. Main screen and lists. 5. Modal screens and pages. 6. Letter search.
+7. Conflicts with REAPER and screen readers. 8. JUCE key quirks. 9. Key routing.
 
-## 1. Принципы
+## 1. Principles
 
-- Одинаковые действия — одинаковые клавиши на всех экранах. Пользователь
-  учит модель один раз.
-- Каждая функция доступна с клавиатуры. Мышь — дополнение (клик по слоту
-  выбирает его и ставит фокус, двойной клик сбрасывает и т.п.).
-- Всё, что зрячий открывает правым кликом (MIDI learn, сброс, пресеты,
-  «автоматизировать»), открывается **Shift+F10** на элементе с фокусом.
-  Это стандарт Windows, незрячий пользователь пробует его первым. Меню
-  открывай у этого элемента (`withTargetComponent`, см. `ui-patterns.md`,
-  раздел 7), отмена возвращает фокус. Клавишу Applications (клавиша меню)
-  добавь, только если убедился, что твоя версия JUCE передаёт её в
-  `keyPressed`. В REAPER проверь, что по Shift+F10 не открывается заодно
-  меню самого REAPER; если открывается — поглощай и отпускание F10
-  (`keyStateChanged` возвращает true).
-- Горячие клавиши видны: в `description` кнопки («Alt+O») и в подсказке на
-  экране для зрячих.
-- Неиспользуемые клавиши внутри экрана плагина поглощаются, чтобы не
-  запустить действие DAW. Исключения делай осознанно (пробел на главном
-  экране, Alt+Tab, клавиши NVDA с Insert/CapsLock — их и так перехватывает
-  NVDA).
-- На краях — тишина, без перехода по кругу. Исключение: переключатели
-  страниц и режимы, где цикл ожидаем (Tab по страницам).
+- Same action, same key on every screen. Users learn the model once (KEY-12).
+- Every function works from the keyboard; the mouse is an extra (KEY-03).
+- Everything a sighted user opens with a right-click (MIDI learn, reset, presets,
+  automation) opens with **Shift+F10** and the **Applications key** on the focused
+  element (a11y::isContextMenuKey). Blind users try these first. Open the menu at the
+  element (`withTargetComponent`); cancel returns focus (KEY-04).
+- Shortcuts are discoverable: in the button description ("Alt+O"), in the spoken short
+  help (F1) and in the manual (KEY-10).
+- Keys not used by a plugin screen are consumed so they cannot run DAW actions.
+  Deliberate exceptions: Space on the main screen (DAW transport), Alt+F4, Alt+Tab, and
+  screen-reader keys (Insert/CapsLock combinations, NVDA+Up Arrow).
+- Edges are silent, no wrap-around; exception: page switchers and modes where cycling is
+  expected (Tab through pages).
+- Navigation is separate from editing: plain arrows explore, so values never change by
+  accident while the user listens around.
 
-## 2. Эталонная раскладка: сетка параметров «Сетка / Значение»
+## 2. Reference layout: parameter grid ("Grid / Value", LSampler-24)
 
-Сетка — один фокусируемый элемент со списком строк «Имя, значение». Строки
-сгруппированы по категориям (страницам), до 8 строк в колонке.
+The grid is one focusable element with rows "Name, value", grouped in categories
+(pages), up to 8 rows per column.
 
-В сетке:
-- Стрелка вверх/вниз — предыдущий/следующий параметр внутри категории.
-- Стрелка влево/вправо — предыдущая/следующая категория (строка в колонке
-  сохраняется, если есть).
-- Home/End — первый/последний параметр категории; Ctrl+Home/End — первый/
-  последний во всей сетке.
-- Page Up/Down — на 8 строк (или к краю категории).
-- Буква/цифра/знак — следующий параметр на эту букву; Shift+буква — назад.
-- Alt+Стрелка вверх/вниз — изменить значение на шаг.
-- Alt+Page Up/Down — грубый шаг (шаг × 40 в LSampler-24; выбери кратность
-  под свои диапазоны).
-- Alt+Стрелка влево/вправо — выбрать множитель шага (1, 5, 10, 15, 20),
-  озвучивается «Step 5».
-- Alt+Home/End — максимум/минимум.
-- Backspace — сбросить параметр к значению по умолчанию.
-- Enter (или Tab, или Alt+V) — перейти в режим «Значение».
-- Escape — выйти из сетки на предыдущий уровень.
+In Grid:
+- Up/Down: previous/next parameter in the category.
+- Left/Right: previous/next category, keeping the row when possible.
+- Alt+Shift+Left/Right: first parameter of the previous/next category (TEST129).
+- Home/End: first/last in the category; Ctrl+Home/End: first/last in the whole grid.
+- Page Up/Down: 8 rows (or to the category edge).
+- Letter, digit or punctuation: next parameter starting with it; Shift+letter: previous.
+- Alt+Up/Down: value by one step.
+- Alt+Page Up/Down: coarse step (LSampler-24: step x 40; choose for your ranges).
+- Alt+Left/Right: step multiplier (1, 5, 10, 15, 20), announced "Step 5".
+- Alt+Home/End: maximum/minimum.
+- Backspace: default value.
+- Shift+Up/Down/Left/Right: next parameter with an active host envelope (TEST134).
+- Ctrl+Shift+A: toggle host automation of this parameter; Alt+Shift+A: deactivate all
+  active envelopes of this plugin instance (TEST158). See parameters-automation.md.
+- Enter (or Tab, or Alt+V): go to Value. Escape: leave the grid one level up.
 
-В режиме «Значение»:
-- Стрелки вверх/вниз — значение ± шаг; влево/вправо — множитель шага;
-  Page Up/Down — грубо; Home/End — максимум/минимум.
-- Tab — открыть поле точного ввода числа (TextEditor с ограничением
-  символов «-0123456789.»). Enter в поле — применить и вернуться в сетку;
-  Escape — отменить.
-- Enter или Shift+Tab — вернуться в сетку.
+In Value:
+- Up/Down: value +/- step; Left/Right: step multiplier; Page Up/Down: coarse;
+  Home/End: maximum/minimum. Alt variants work the same.
+- Tab: exact entry field (TextEditor accepting "-0123456789."). Enter applies and
+  returns to Grid; Escape cancels.
+- Enter or Shift+Tab: back to Grid. Escape: Grid.
 
-Почему так: в сетке простые стрелки только перемещают, поэтому значение не
-меняется случайно при исследовании. Alt-комбинации позволяют править, не
-покидая сетку. Режим «Значение» удобен для долгой точной настройки.
+AccessibleParameterList.h implements a simplified version of this model.
 
-Варианты для простых плагинов (из ToneTrace): если контролов мало и каждый —
-отдельный элемент, допустима модель «стрелки сразу меняют значение»:
-вверх/вниз ±1 шаг, Page Up/Down ± крупный шаг, Home/End — пределы, Enter —
-точный ввод, 0 или N — нейтраль. Главное — одна модель на весь плагин.
+## 3. Simple editors (few controls, each a separate element)
 
-## 3. Главный экран и списки
+Allowed alternative (ToneTrace, Surge XT): arrows change the value of the focused
+control directly.
+- Up/Right +step, Down/Left -step; Shift+arrows fine step (Surge XT); Page Up/Down
+  coarse step.
+- Home/End: limits. Platform convention (Windows trackbar, ARIA) is Home = minimum;
+  LSampler-24 and Surge XT use Home = maximum. Pick one rule for the whole plugin.
+- Backspace or Delete: default value (Surge XT uses Delete).
+- Enter: exact entry. Shift+F10: context menu.
+- Tab/Shift+Tab: next/previous control. Control groups (oscillator, filter, effects):
+  keys to jump to the next/previous group (Surge XT has "Move Focus to Next/Previous
+  Control Group"); a multi-cell widget is one Tab stop.
+TextValueSlider.h and ParameterOverlay implement this model.
 
-- Сетка элементов (24 слота как 3 колонки по 8): стрелки по строкам и
-  колонкам, Home/End — начало/конец колонки, Ctrl+Home/End — первый/
-  последний. Enter — открыть элемент; на пустом — сказать «Empty slot».
-- Операции над текущим элементом: Alt+C/X/V (копировать, вырезать,
-  вставить), Alt+R (переименовать), Delete (очистить), Alt+Delete (очистить
-  всё), Alt+Enter (свойства).
-- Ctrl+Стрелка вверх/вниз внутри вложенных экранов — перейти к
-  предыдущему/следующему **непустому** элементу, сохранив текущий параметр
-  и экран. Если такого нет, а непустой всего один — «Only one loaded slot».
-- Alt+L — «где я?»: всегда возвращает к главному списку или к сетке
-  текущего экрана. Полезно, когда пользователь запутался.
-- Кнопки действий в ряду: Tab/Shift+Tab по кругу между кнопками и главным
-  списком; стрелки, Home/End, Page Up/Down на кнопках поглощаются.
+## 4. Main screen and lists
 
-## 4. Модальные экраны и страницы
+- Grid of items (24 slots as 3 columns of 8): arrows by rows and columns, Home/End
+  start/end of the column, Ctrl+Home/End first/last. Enter opens the item; on an empty
+  one say "Empty slot".
+- Operations on the current item: Alt+C/X/V copy, cut, paste; Alt+R rename (F2 in
+  browsers); Delete clear (with confirmation if it loses data); Alt+Delete clear all;
+  Alt+Enter properties.
+- Ctrl+Up/Down inside nested screens: previous/next non-empty item, keeping the current
+  parameter and screen. If there is none: "Only one loaded slot".
+- Alt+L ("where am I"): always back to the main list or the grid of the current screen.
+- A "state" hotkey that speaks the current context (Surge XT: "Announce Editor State";
+  it speaks the patch, scene, selected oscillator and its type, modulator and FX slot).
+- Rows of action buttons: Tab/Shift+Tab cycle between the buttons and the main list;
+  arrows, Home/End, Page keys on buttons are consumed.
 
-- Модальный экран (браузер файлов, редактор срезов, свойства, About)
-  перехватывает все клавиши, включая события отпускания
-  (`keyStateChanged` возвращает true), и не пропускает их в DAW.
-- Escape закрывает экран (или выходит из вложенного режима на уровень
-  выше). Повторная горячая клавиша открытия тоже закрывает (Alt+M открыл —
-  Alt+M закрыл).
-- Страницы внутри экрана: F1, F2, F3 — прямой переход, Tab/Shift+Tab — по
-  кругу. Недоступная страница не открывается и объясняет почему («Slice
-  Sequencer inactive»). F4 (или F1, если страниц нет) — краткая справка
-  голосом.
-- Альтернатива для редактора со страницами (ToneTrace): переключатель
-  страниц — одна Tab-остановка (roving focus: фокусируется только кнопка
-  выбранной страницы), стрелки влево/вправо меняют страницу, Ctrl+Tab /
-  Ctrl+Shift+Tab — из любого места.
-- Действия внутри экранов с выделением: Shift+Стрелки — диапазон,
-  Shift+Space — переключить элемент, Ctrl+Delete — снять выделение,
-  Ctrl+C/V — копировать/вставить, Ctrl+Z/Y — отмена/повтор.
+## 5. Modal screens and pages
 
-## 5. Поиск по первой букве
+- A modal screen (file browser, slice editor, properties, About) receives every key,
+  including key releases (`keyStateChanged` returns true), and passes nothing to the DAW
+  (KEY-02, ModalKeySurface.h).
+- Escape closes the screen or leaves a nested mode one level up.
+- Opening hotkeys: either a toggle (Alt+M opens, Alt+M closes) or "go there" from
+  anywhere (LSampler-24 TEST145 changed Alt+F to always open the FX screen, with Escape
+  to leave). Choose one behaviour for all screen hotkeys.
+- Pages inside a screen: F1, F2, F3 go directly; Tab/Shift+Tab cycle. An unavailable
+  page does not open and says why ("Slice Sequencer inactive"). F4 (or F1 without pages):
+  short spoken help.
+- Page switcher alternative (ToneTrace): one Tab stop (roving focus: only the selected
+  page button is focusable), Left/Right change the page, Ctrl+Tab/Ctrl+Shift+Tab from
+  anywhere.
+- Screens with selection: Shift+arrows range, Shift+Space toggle item, Ctrl+Delete clear
+  selection, Ctrl+C/V copy/paste, Ctrl+Z/Y undo/redo (inside editors with their own
+  history only).
+- Read-only text (About, properties): arrows, Home/End, Page keys move inside the text,
+  Ctrl+A selects all, Ctrl+C copies (TEST159).
 
-- Плоская буква — вперёд по кругу, Shift+буква — назад. Принимай буквы,
-  цифры и знаки (коды 33–126).
-- Ищи по осмысленному имени: если у всех параметров одинаковая приставка
-  («Slice Fade In», «Slice Mode»), пропускай её при сравнении.
-- Внимание к коду клавиши (см. раздел 7): для поиска используй
-  `getTextCharacter()`, иначе стрелки и Page Up могут попасть в диапазон
-  «печатных» кодов и перестать работать (баг TEST39→TEST40). Но для
-  Shift+цифра `getTextCharacter()` даёт «!», поэтому для обратного поиска
-  бери символ из `getKeyCode()` и проверяй, что это не служебная клавиша.
+## 6. Letter search
 
-## 6. Конфликты с REAPER и NVDA
+- Plain key: forward with wrap; Shift+key: backward. Letters, digits and punctuation.
+- Search the name the user HEARS, not a host or internal name, and skip repeated
+  prefixes ("Loop 3, ", "Slice ") and values (TEST129).
+- Use `a11y::searchCharacter(key)`: the typed character first; key codes only as a
+  fallback for digits and punctuation (some hosts send no text character for them,
+  TEST135); never F-keys or navigation keys, whose codes overlap ASCII (Up is '&', F1 is
+  'p', TEST40, TEST134); Shift+digit gives the digit, not "!".
+- No match: silent, like an edge.
 
-- REAPER получает все необработанные плагином клавиши и выполняет свои
-  действия (пробел — транспорт, R — запись и т.д.). Поэтому `keyPressed`
-  должен возвращать true для всего, что относится к плагину. Пользователю
-  также полезно знать об опции окна FX «Send all keyboard input to plug-in».
-- Не занимай клавиши NVDA: NVDA+…, Insert/CapsLock-комбинации, NVDA+Стрелка
-  вверх (чтение текущей строки). Ctrl сам по себе останавливает речь —
-  не вешай действий на одиночный Ctrl.
-- Пробел: на главном экране — DAW. Прослушивание включается явным
-  переключателем (Alt+P в LSampler-24: «Slot preview On» / «DAW space On»).
-  В сетке параметров по умолчанию пробел — прослушивание; Alt+P отдаёт его
-  DAW.
-- Ctrl+S, Ctrl+Z и подобные в обычной сетке лучше поглотить (иначе REAPER
-  сохранит проект или отменит действие в проекте), а внутри редакторов с
-  собственной историей — использовать по назначению.
-- F1 в REAPER открывает справку REAPER — внутри модального экрана плагина
-  его можно занять.
-- Alt+F4 и Alt+Tab не поглощай никогда: пользователь должен всегда мочь
-  закрыть окно плагина и переключиться в другое приложение.
+## 7. Conflicts with REAPER and screen readers
 
-## 7. Особенности клавиш JUCE
+- REAPER receives every key the plugin does not consume and runs its action (Space
+  transport, R record, Ctrl+S save project, Ctrl+Z undo project). The plugin must
+  return true for everything that belongs to it. REAPER's FX window option "Send all
+  keyboard input to plug-in" helps users.
+- Never use screen-reader keys: NVDA+..., Insert/CapsLock combinations, NVDA+Up Arrow.
+  Ctrl alone stops speech: never bind an action to Ctrl alone.
+- Space: main screen = DAW. Preview by an explicit toggle (LSampler-24 Alt+P: "Slot
+  preview On" / "DAW space On"). A ComboBox opens its popup on Space and Enter: make
+  sure that does not steal Space from the DAW (TEST146).
+- Ctrl+S, Ctrl+Z and similar on a normal plugin screen: consume them (otherwise REAPER
+  saves or undoes the project); inside editors with their own history use them.
+- F1 in REAPER opens REAPER help: a plugin's modal screen may take it.
+- Alt+F4 and Alt+Tab are never consumed (KEY-08).
 
-- **Windows: Ctrl = Command.** `ModifierKeys::isCommandDown()` на
-  Windows/Linux истинно при нажатом Ctrl. Условие
-  `mods.isCtrlDown() && !mods.isCommandDown()` никогда не выполнится
-  (TEST114: Ctrl+Shift+A не работал вообще). Проверяй только `isCtrlDown()`.
-- **Ctrl+буква:** `getTextCharacter()` может вернуть управляющий символ,
-  поэтому для Ctrl/Alt+буква сравнивай
-  `CharacterFunctions::toLowerCase(juce_wchar(key.getKeyCode()))`.
-- **Alt+буква:** в LSampler-24 используется `getTextCharacter()` в нижнем
-  регистре; если на какой-то раскладке не срабатывает, добавь проверку по
-  `getKeyCode()`.
-- **Раскладка:** коды букв в JUCE — латинские. Русская раскладка не мешает
-  Alt+O и т.п., но поиск по первой букве русских имён зависит от
-  `getTextCharacter()`.
-- **Слушатели:** при `addKeyListener(editor)` на дочерних элементах и
-  собственном `keyPressed` у контролов легко обработать клавишу дважды.
-  Делай одну точку входа (`handleKeyPress(key, source)`), а в контролах
-  вызывай её первой и только потом базовую обработку.
+## 8. JUCE key quirks
 
-## 8. Маршрутизация клавиш в коде
+- **Windows: Ctrl = Command.** `ModifierKeys::isCommandDown()` is true while Ctrl is held
+  on Windows and Linux. `isCtrlDown() && !isCommandDown()` never matches (KEY-01). Use
+  `a11y::modsAre` / `a11y::is` (exact modifier match).
+- **Exact modifiers.** Every branch tests all modifiers, and specific combinations come
+  before generic ones; otherwise Shift+Alt+Up runs the Alt+Up branch (KEY-05, TEST157).
+- **Ctrl+letter / Alt+letter:** `getTextCharacter()` may be a control character or 0;
+  compare `CharacterFunctions::toLowerCase((juce_wchar) key.getKeyCode())` (a11y::is does).
+- **Applications key:** JUCE on Windows reports key code 0x5D with no text character
+  (Surge XT handles it); ']' has the same code but types a character.
+- **Layouts:** JUCE letter codes are Latin. A Russian layout does not break Alt+O, but
+  letter search in non-Latin names depends on `getTextCharacter()`.
+- **Listeners:** `addKeyListener(editor)` on children plus their own `keyPressed` handle
+  a key twice (KEY-11). Use one entry point.
+- **Unknown host behaviour:** when a key does not arrive or arrives strangely, add the
+  temporary keyboard diagnostic from testing.md and let the user report what JUCE
+  receives (LSampler-24 TEST136 to TEST138).
 
-Структура обработчика, которая хорошо себя показала:
+## 9. Key routing
 
-1. Если идёт фоновая операция — поглотить всё, кроме Escape.
-2. Открыт модальный экран (About, Properties, браузер, редактор) — отдать
-   клавишу ему целиком и вернуть true.
-3. Глобальные команды текущего контекста (Alt+буквы) — с явными условиями,
-   на каком экране они допустимы.
-4. Экран «Значение» / поле ввода — его клавиши.
-5. Сетка / список — навигация и поиск по букве.
-6. В конце экрана, который владеет клавиатурой, — `return true` (поглотить).
-   На главном экране — `return false` только для того, что намеренно
-   отдаётся DAW.
+Structure that worked well (one entry point `handleKeyPress(key, source)`, called first
+by every control):
 
-Каждое условие проверяет модификаторы полностью (`!isAltDown() &&
-!isShiftDown() …`), иначе Shift+Стрелка сработает как Стрелка.
+1. A background operation is running: consume everything except Escape.
+2. A modal screen is open (About, properties, browser, editor): give it the key and
+   return true.
+3. Global commands of the current context (Alt+letters), each with an explicit list of
+   screens where it is allowed.
+4. Value mode / entry field keys.
+5. Grid / list navigation and letter search.
+6. At the end of a screen that owns the keyboard: `return true` (consume). On the main
+   screen, `return false` only for keys deliberately given to the DAW (Space).
+
+Templates (AccessibleListCell, AccessibleParameterList, TextValueSlider, overlays) return
+false for keys they do not use, so this editor-level routing decides; the editor must
+then consume them (step 6).

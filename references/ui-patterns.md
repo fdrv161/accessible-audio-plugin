@@ -1,212 +1,227 @@
-# Паттерны экранов
+# Screen patterns
 
-Содержание: 1. Список-ячейка. 2. Сетка параметров. 3. Отдельные контролы.
-4. Браузер файлов. 5. Свойства и текст для чтения. 6. Подтверждения и
-диалоги. 7. Всплывающие меню. 8. Долгие операции и прогресс. 9. Визуальные
-дисплеи. 10. Справка и About. 11. Переключатель страниц. 12. Режимы
-прослушивания.
+Contents: 1. Virtual list cell. 2. Parameter grid. 3. Individual controls.
+4. Retrofitting an existing custom GUI. 5. File browser. 6. Properties and read-only
+text. 7. Dialogs. 8. Popup menus. 9. Long operations. 10. Visual displays.
+11. Help and About. 12. Page switcher. 13. Preview modes. 14. Accessibility settings.
+15. WebView editors and other frameworks.
 
-## 1. Список-ячейка (виртуальный список)
+## 1. Virtual list cell
 
-Задача: 24 слота, сотни файлов, 128 шагов секвенсора. Делать сотни
-компонентов дорого и шумно для скринридера.
+Task: 24 slots, hundreds of files, 128 sequencer steps. Hundreds of components are
+expensive and noisy for screen readers.
 
-Решение: **один** фокусируемый компонент, который хранит индекс курсора и
-показывает текущую строку. Стрелки меняют индекс, обновляют title и
-озвучивают новую строку. Шаблон: `assets/templates/AccessibleListCell.h`.
+Solution: ONE focusable component that keeps a cursor index and shows the current row.
+Arrows change the index and speak the new row; the title is live. Template:
+AccessibleListCell.h.
 
-- Строка содержит всё нужное: «Slot 3, Kick»; «Folder Drums»; «Selected.
-  Slot 4, Snare Soft»; «Step 5, Selected. Repeat, 2».
-- Состояние, которое нужно услышать, — словами в строке, а не цветом
-  («Selected», «Auto», «Mixed values»).
-- После анонса строка остаётся в title — NVDA+Стрелка вверх её повторит.
-- Пустой список — строка «Empty folder» / «No recent paths».
-- Если каждому элементу нужна своя роль/фокус (чтобы обходить объектной
-  навигацией), можно сделать реальные компоненты, но фокусируемым держать
-  только текущий (как слоты в LSampler-24: `setWantsKeyboardFocus` только у
-  выбранного слота).
+- The row says everything needed: "Slot 3, Kick"; "Folder Drums"; "Selected. Slot 4,
+  Snare Soft"; "Step 5, Selected. Repeat, 2".
+- State is words in the row, never only colour ("Selected", "Auto", "Mixed values").
+- Empty list: a row such as "Empty folder" / "No recent paths".
+- If each item needs its own role (object navigation), real components are possible,
+  but only the current one is focusable (LSampler-24 slots: setWantsKeyboardFocus only
+  on the selected slot).
 
-## 2. Сетка параметров
+## 2. Parameter grid
 
-Эталон LSampler-24: `ComboBox` как «сетка» (пункты «Имя, значение») +
-`Slider` как «Значение» + временный `TextEditor` для точного ввода.
-Готовый более простой вариант без ComboBox — шаблон
-`AccessibleParameterList.h` (одна ячейка, живой title, все параметры
-`AudioProcessor`).
+LSampler-24 reference: a ComboBox as the grid (items "Name, value") + a Slider as Value
++ a temporary TextEditor for exact entry. Simpler ready version without ComboBox:
+AccessibleParameterList.h (one cell, live title, all AudioProcessor parameters).
 
-Требования:
-- Каталог параметров **данными**, а не кодом: массив описаний (ключ, имя,
-  категория, тип, min, max, default, шаг, крупный шаг, единица, знаки после
-  запятой, подписи вариантов). Сетка, форматирование, параметры хоста,
-  сохранение строятся из одного каталога.
-- Форматирование значения — одна функция `formatParameter(index, value)`.
-  Ею пользуются сетка, «Значение», поле ввода (обратный разбор), и её же
-  смысл должен совпадать с `getText` параметра хоста.
-- Кнопки-действия в сетке («Zero Crossing: Apply») — Enter выполняет,
-  озвучка «Applied».
-- Память позиции: курсор сетки запоминается (на слот или глобально) только
-  в памяти, не в пресете.
-- Обновляй только выбранную строку, а не всю сетку из 150 пунктов 10 раз в
-  секунду (TEST58: это нагружало GUI).
-- При смене пункта через код без анонса используй
-  `dontSendNotification`; при навигации пользователя —
-  `sendNotificationSync`, чтобы ComboBox сообщил скринридеру новый пункт.
+- Parameter catalog as DATA, not code: key, name, category, type, min, max, default,
+  step, coarse step, unit, decimals, option labels. Grid, formatting, host parameters
+  and saving are built from one catalog.
+- One formatting function `formatParameter(index, value)` used by grid, Value, entry
+  parsing and the host parameter's getText.
+- Action rows ("Zero Crossing: Apply"): Enter runs them, speech "Applied".
+- Cursor memory per slot or global, in memory, not in presets.
+- Update only the selected row, not a 150-item grid ten times a second (TEST58).
+- Programmatic item change: dontSendNotification; user navigation: sendNotificationSync
+  so the ComboBox reports the new item to the screen reader. While repopulating, no
+  notifications (RT-05).
 
-## 3. Отдельные контролы (если не сетка)
+## 3. Individual controls
 
-- Кнопка: `TextButton`, title = действие, description = горячая клавиша.
-  Иконка-кнопка (`DrawableButton`/`ImageButton`) обязана получить title.
-- Переключатель: `ToggleButton` — скринридер сам скажет «отмечено/не
-  отмечено». Не меняй вид без смены состояния.
-- Выбор из вариантов: `ComboBox` с `setEditableText(false)`; добавь
-  Home/End — первый/последний вариант (стандартный JUCE ComboBox их не
-  обрабатывает).
-- Ползунок с единицами: шаблон `TextValueSlider.h`: текстовое значение
-  «+3 dB», строгий разбор точного ввода, шаги клавиатуры, жесты.
-- Поле только для чтения: `TextEditor` с `setReadOnly(true)`,
-  `setCaretVisible(true)` (иначе NVDA не сможет ходить по тексту
-  стрелками), `setTabKeyUsedAsCharacter(false)` (Tab должен переводить
-  фокус).
-- Уникальные имена: если два контрола звучат одинаково (полосы EQ «1 kHz»
-  и «1 kHz» после округления), увеличивай точность до различимости
-  (ToneTrace: «1.02 kHz», «1.05 kHz»).
-- Синхронизация с хостом: флаг `syncingFromHost` вокруг `setValue` из
-  хоста, чтобы обратный вызов `onValueChange` не отправил значение и жест
-  обратно (см. `parameters-automation.md`).
+- Button: TextButton; title = action; description = shortcut. Image buttons must get a
+  title (CTL-01).
+- Toggle: ToggleButton (the screen reader says checked/not checked). Custom toggles:
+  override getCurrentState with withCheckable/withChecked (CTL-07).
+- Choice: ComboBox with setEditableText(false); add Home/End (CTL-08).
+- Slider with units: TextValueSlider.h (text value "+3 dB", strict parsing, keyboard
+  steps, gestures).
+- Read-only field: TextEditor with setReadOnly(true), setCaretVisible(true),
+  setTabKeyUsedAsCharacter(false) (CTL-05).
+- Unique names: raise display precision until names differ (CTL-04).
+- Host sync: syncingFromHost guard around setValue from the host (PAR-04).
 
-## 4. Браузер файлов (внутренний)
+## 4. Retrofitting an existing custom GUI
 
-Системный диалог Windows доступен, но внутренний браузер удобнее: та же
-модель клавиш, прослушивание, память позиции, ограничение папкой
-библиотеки. Паттерн LSampler-24 (Alt+O, Alt+S, Alt+B, браузер Alt+M):
+Most inaccessible plugins draw knobs and buttons in paint() and handle only the mouse.
+Do not rewrite the GUI. Choose, from cheapest:
 
-- Список-ячейка: сначала папки («Folder Drums»), затем файлы нужных
-  расширений (фильтр по расширению, не открывая каждый файл).
-- Стрелка вверх/вниз — элемент; вправо или Enter на папке — войти;
-  влево или Backspace — выйти (в корне библиотеки — тишина); Page Up/Down —
-  на 10; Home/End; буква — поиск.
-- Space — Preview On/Off. Режим прослушивания — состояние, а не разовое
-  действие: при включённом режиме каждый выбранный файл звучит сам; конец
-  файла не выключает режим. На папке — тишина, режим остаётся.
-- Задержка прослушивания при быстрой прокрутке (один тик таймера 10 Гц).
-- Enter на файле — загрузить; если место занято — подтверждение (раздел 6).
-- Escape — закрыть без изменений, вернуть фокус туда, откуда открыли.
-- Память: каждый браузер помнит свою папку, индекс и путь выбранного
-  элемента (в пользовательских настройках), при возвращении в папку — на
-  тот элемент, из которого вышли. Запомненный путь принимается, только если
-  он внутри текущего корня библиотеки.
-- Корень нельзя покинуть, если браузер ограничен библиотекой.
-- Мультивыбор (Shift+Space, Shift+стрелки) с озвучкой назначения
-  («Selected. Slot 4, Snare»); Ctrl+Стрелки выбирают слот назначения.
+1. **Accessible parameter page.** Add AccessibleParameterList as a focusable element (or
+   a page opened with a hotkey) that covers every host parameter. Hours, not days; the
+   visual GUI stays as it is.
+2. **Overlays** (Surge XT's approach). For each visual widget, an
+   `a11y::ParameterOverlay` (bound to the same host parameter) or `a11y::ActionOverlay`
+   (for drawn buttons) is laid over it: mouse goes to the widget, keyboard focus and
+   screen readers get the overlay. Then:
+   - `widget.setWantsKeyboardFocus(false)`, and `widget.setAccessible(false)` if it
+     exposes something useless;
+   - set the Tab order with setExplicitFocusOrder on overlays if the visual order is not
+     logical;
+   - give the containers titles (group role) so focus entering a section says
+     "Filter".
+3. **Real accessible components** for new screens (templates in section 3).
 
-## 5. Свойства и текст для чтения
+Things a retrofit must not change without asking: DSP, parameter IDs and order, state
+format.
 
-- Свойства (Alt+Enter) — модальная панель, контейнер с именем
-  «Properties», внутри две колонки `TextEditor` только для чтения. Стрелки
-  вверх/вниз — по строке «Ключ: значение» с озвучкой, влево/вправо или Tab —
-  колонка, Ctrl+Стрелки — соседний непустой элемент, Escape — закрыть.
-- Всё, что показывают графика и метры, должно быть в свойствах текстом:
-  длительность, частота, каналы, пик в dBFS, окно воспроизведения и т.д.
-- About: текст в `TextEditor` (читаемый стрелками), кнопки «Project»,
-  «Contact», «Close»; Tab циклится только внутри About; Escape и Alt+C
-  закрывают.
+## 5. File browser (internal)
 
-## 6. Подтверждения и диалоги
+The Windows file dialog is accessible, but an internal browser gives the same key model,
+preview, position memory and library limits. LSampler-24 pattern (Alt+O, Alt+S, Alt+B;
+save browsers TEST123):
 
-- Асинхронный `juce::AlertWindow` с `enterModalState(true, callback, true)`,
-  не синхронные `showMessageBox`/`runModalLoop` (в плагинах модальные циклы
-  опасны и часто запрещены).
-- Кнопки с клавишами: Yes — `KeyPress('y')`, No — `KeyPress('n')` и
-  Escape. Начальный фокус — на «No» (безопасный выбор).
-- Задай окну title и name («Confirm replacement»), текст называет, что будет
-  потеряно, и заканчивается «Press Y or N.»
-- Подтверждение решается **до** запуска фоновой операции.
-- Переименование: `AlertWindow` с `addTextEditor`, текст выделен, Enter — OK,
-  Escape — Cancel; после закрытия — фокус на элемент и его новая строка.
-- Системный диалог сохранения не предупредит о перезаписи, если имя потом
-  меняется (добавляется префикс/расширение). Проверь итоговый путь сам и
-  спроси.
+- List cell: folders first ("Folder Drums"), then files of the wanted extensions
+  (filter by extension, do not open each file).
+- Up/Down item; Right or Enter on a folder enters; Left or Backspace goes up (silent at
+  the library root); Page Up/Down by 10; Home/End; letter search.
+- Space: Preview On/Off as a mode (section 13); on folders silent, mode kept.
+- Preview delayed by one 10 Hz timer tick during fast scrolling.
+- Enter on a file loads it; if the target is occupied, confirm (section 7).
+- Save browsers: Enter saves into the current folder (even an empty one); an existing
+  file asks Y/N; N stays in the browser.
+- Shift+F10 menu: New folder, Rename, Delete; F2 renames (keeping the extension); Delete
+  asks Y/N (folders: warn about contents); deletion runs as an async task; file
+  operations stay inside the browser's root.
+- Escape: close without changes, focus back where it came from.
+- Memory: each browser remembers its folder, index and selected path (user settings);
+  a remembered path is accepted only inside the current library root.
+- Multi-select (Shift+Space, Shift+arrows) speaks the destination ("Selected. Slot 4,
+  Snare"); Ctrl+arrows choose the destination slot.
 
-## 7. Всплывающие меню
+## 6. Properties and read-only text
 
-- `PopupMenu::showMenuAsync` с `withTargetComponent` (меню привязано к
-  кнопке).
-- Заголовок окна меню через свой LookAndFeel (`preparePopupMenuWindow`):
-  NVDA скажет «Advanced, menu».
-- Отмена меню (result == 0) — вернуть фокус туда, откуда открыли.
-- После выполнения команды, которая открыла диалог/браузер, можно заново
-  открыть меню на той же команде
-  (`withInitiallySelectedItem(lastItem)`), чтобы пользователь продолжил с
-  того же места.
-- Не открывай меню, пока фокус не в окне плагина (см. приёмы REAPER в
-  `announcements-and-focus.md`).
-- Недоступные пункты оставляй видимыми, но выключенными и с пояснением
-  («C:\…\Library (unavailable)»).
+- Properties (Alt+Enter): modal panel named "Properties", two read-only TextEditor
+  columns. Up/Down by line "Key: value" with speech; Left/Right or Tab switch columns;
+  Ctrl+arrows the neighbouring non-empty item; Escape closes.
+- Everything graphics and meters show must be in properties as text: length, sample
+  rate, channels, peak in dBFS, playback window.
+- About: text in a read-only TextEditor (readable by line; Ctrl+A, Ctrl+C), buttons
+  "Project", "Contact", "Close"; Tab cycles inside About; Escape and Alt+C close.
 
-## 8. Долгие операции и прогресс
+## 7. Dialogs
 
-- Загрузка банка, импорт, экспорт — в фоновом потоке (одна задача за раз,
-  `ThreadPool` с низким приоритетом), результат возвращается через
-  `MessageManager::callAsync` и `SafePointer` редактора.
-- Во время операции: запомнить фокус, выключить все контролы, кроме метки
-  статуса; метка статуса становится фокусируемой и получает фокус (только
-  если фокус был в плагине); её title — «Loading bank, 42 percent».
-- Озвучка: одно сообщение при старте, затем актуальный процент не чаще раза
-  в 4 секунды и только если фокус на метке статуса; после окончания —
-  итог («Bank loaded: Salamander» или ошибка с причиной) и возврат фокуса.
-- Пока идёт операция, клавиши поглощаются, но Escape проходит (не блокирует
-  пользователя в DAW).
-- Закрытие окна плагина не ждёт фоновую задачу; уничтожение процессора —
-  ждёт.
-- Процент считай по реальному объёму работы (кадры при декодировании
-  блоками, число файлов), а не по времени.
+- Asynchronous AlertWindow only (enterModalState with a callback), never
+  runModalLoop/showMessageBox (DLG-01).
+- Text entry (save, rename, new folder): `a11y::askForText` in AccessibleDialog.h. Focus
+  starts in the field with the text selected; Enter = OK, Escape = Cancel handled by the
+  field itself; title says the action ("Save Slot", "Rename folder"); no description;
+  internal Labels hidden from screen readers; explicit focus order field, OK, Cancel; no
+  extra grabKeyboardFocus after enterModalState (TEST124, TEST125).
+- Confirmation: `a11y::confirm`. Yes = Y, No = N and Escape; first focus on No; text names
+  what will be lost and ends with "Press Y or N."; decide before starting background
+  work (DLG-03).
+- After the dialog, return focus in the callback (async) and speak the result once.
+- The system save dialog does not warn if the final name changes later (prefix,
+  extension): check the final path yourself (DLG-06).
 
-## 9. Визуальные дисплеи
+## 8. Popup menus
 
-Осциллограмма, метры, обзор слотов, декоративные рамки:
+- `PopupMenu::showMenuAsync` with `withTargetComponent` (menu at the element).
+- Menu window title through LookAndFeel::preparePopupMenuWindow: NVDA says "Advanced,
+  menu" (DLG-04).
+- Cancel (result 0) returns focus to where the menu was opened.
+- After a command that opened a dialog or browser, reopening the menu on the same item
+  (`withInitiallySelectedItem(lastItem)`) lets the user continue.
+- Do not open menus while focus is outside the plugin window (DLG-05).
+- Disabled items stay visible, disabled, with a reason ("D:\Library (unavailable)").
+- Context menus open with Shift+F10 / Applications key and expose the showMenu
+  accessibility action (KEY-04).
+
+## 9. Long operations and progress
+
+- Bank load, import, export: background thread (one job at a time, low-priority
+  ThreadPool); result back through MessageManager::callAsync with the editor's
+  SafePointer.
+- During the job: remember focus; disable all controls except a status element; make the
+  status element focusable and focus it (only if focus was in the plugin); its title is
+  "Loading bank, 42 percent".
+- Speech: one phrase at start; the percent at most every 4 seconds and only while the
+  status element has focus; at the end the result ("Bank loaded: Salamander" or the error
+  and what to do) and focus back where it was.
+- While the job runs, keys are consumed except Escape.
+- Closing the plugin window does not wait for the job; destroying the processor does.
+- Percent from real work (frames decoded, files done), not time.
+
+## 10. Visual displays
+
+Waveforms, meters, slot overviews, decorative frames:
 
 ```cpp
 class VisualOnly : public juce::Component
 {
 public:
-    VisualOnly() { setAccessible(false); setWantsKeyboardFocus(false); setInterceptsMouseClicks(false, false); }
+    VisualOnly() { setAccessible (false); setWantsKeyboardFocus (false); setInterceptsMouseClicks (false, false); }
 };
 ```
 
-Так NVDA их не видит, мышь проходит сквозь них, а реальные контролы
-остаются в прежнем порядке фокуса. Добавление красивого GUI не должно
-менять ни одного обработчика клавиш и ни одной фразы (так был сделан
-«Vintage Rack GUI» в LSampler-24, TEST46).
+Screen readers do not see them, the mouse goes through, real controls keep their focus
+order. Adding a nicer GUI must not change any key handler or phrase (LSampler-24
+"Vintage Rack GUI", TEST46).
 
-## 10. Справка и About
+## 11. Help and About
 
-- HTML-справка встраивается в бинарник (`juce_add_binary_data`), при вызове
-  записывается во временную папку и открывается браузером по умолчанию.
-- В HTML: `lang` у `<html>` и у каждого языкового раздела, заголовки по
-  порядку (h1, h2), навигация по языкам ссылками, фокус на h1 при смене
-  языка, без таблиц там, где можно списком.
-- Меню выбора языка с заголовком; отмена возвращает фокус.
-- Краткая голосовая справка по F1/F4 внутри сложных экранов.
+- HTML help embedded in the binary (juce_add_binary_data), written to a temp folder and
+  opened in the default browser.
+- In the HTML: `lang` on `<html>` and on each language section; headings in order
+  (h1, h2); language navigation by links; focus to h1 when switching language; lists
+  instead of tables where possible.
+- Language menu with a title; cancel returns focus.
+- Short spoken help (F1/F4) inside complex screens.
 
-## 11. Переключатель страниц (вариант ToneTrace)
+## 12. Page switcher (ToneTrace variant)
 
-- Кнопки страниц — радиогруппа, фокусируемой делается только выбранная
-  (`setWantsKeyboardFocus(selected)`), поэтому весь ряд — одна
-  Tab-остановка.
-- Стрелки влево/вправо, Home/End меняют страницу и переносят фокус на её
-  кнопку; title кнопки — «Bands page selector», help — правила.
-- При смене выбранной кнопки — `notifyAccessibilityEvent(valueChanged)`.
-- Ctrl+Tab / Ctrl+Shift+Tab — смена страницы из любого места.
+- Page buttons are a radio group; only the selected one is focusable
+  (`setWantsKeyboardFocus(selected)`), so the row is one Tab stop.
+- Left/Right, Home/End change the page and move focus to its button; title "Bands page
+  selector", help with the keys.
+- On change: `notifyAccessibilityEvent(valueChanged)`.
+- Ctrl+Tab / Ctrl+Shift+Tab change the page from anywhere.
 
-## 12. Режимы прослушивания
+## 13. Preview modes
 
-- Прослушивание — режим On/Off, переключаемый одной клавишей, а не
-  «нажми ещё раз, если звук кончился». Состояние хранится в редакторе явно,
-  не выводится из того, играет ли голос (TEST96).
-- Навигация при включённом режиме не перезапускает уже играющую фразу
-  секвенсора, а лишь запоминает новую точку старта (TEST38).
-- Прослушивание идёт тем же путём, что и MIDI-нота (с настройками слота),
-  если пользователь слушает «как будет звучать», и «сырым» — если это
-  файл в браузере, ещё не загруженный в слот.
-- Любое прослушивание останавливается при выходе фокуса из плагина и при
-  закрытии редактора.
+- Preview is an On/Off mode switched by one key, not "press again when the sound
+  ended". The state is an explicit flag in the editor, never derived from whether a
+  voice is playing (TEST96).
+- Navigation with preview on does not restart a phrase that is already playing; it only
+  remembers the new start point (TEST38).
+- Preview through the same path as a MIDI note (slot settings) when the user listens
+  "as it will sound"; raw for a browser file not yet loaded.
+- Every preview stops when focus leaves the plugin and when the editor closes (FOC-08).
+
+## 14. Accessibility settings
+
+Some behaviours that help screen-reader users disturb sighted mouse users (keys that
+follow focus, spoken announcements). Surge XT keeps them as user options and offers one
+command, "Set recommended accessibility options", which turns on keyboard shortcuts,
+menus and edit keys that follow keyboard focus, announcements, expanded menus, and
+focus moves after actions. If your plugin needs such options:
+- one menu item (and hotkey) to enable all recommended options at once, announced as a
+  list of what changed;
+- store them in user settings, not in presets;
+- default for a plugin made for blind users: everything on.
+
+## 15. WebView editors and other frameworks
+
+- **JUCE 8 WebView UIs** (WebBrowserComponent with WebView2 on Windows): accessibility
+  comes from the HTML (native buttons, labels, headings, aria-live), not from JUCE
+  handlers. NVDA may treat the page as a document (browse mode) and take the arrow keys:
+  for app-like screens use focus mode or `role="application"` deliberately and test with
+  NVDA; announcements through an aria-live region; key routing to the DAW still needs
+  care. These notes are general web knowledge, not tested in a plugin yet: verify.
+- **Frameworks without screen-reader support:** say so plainly. The minimum that always
+  works is excellent host parameters (OSARA and the DAW's generic editor read them);
+  the full path is moving the editor to JUCE.

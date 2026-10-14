@@ -1,92 +1,84 @@
-# Параметры хоста и автоматизация
+# Host parameters and automation
 
-Содержание: 1. Зачем это доступности. 2. ID и порядок. 3. Имена, тексты,
-единицы. 4. Что выставлять хосту. 5. Потоки и жесты. 6. Синхронизация без
-«эха». 7. Автоматизация с клавиатуры (Ctrl+Shift+A). 8. REAPER API из
-VST3. 9. Индикатор «Auto». 10. Макро-параметры. 11. Проверки.
+Contents: 1. Why this matters. 2. IDs and order. 3. Names, texts, units. 4. What to
+expose. 5. Threads and gestures. 6. Sync without echo. 7. Automation from the
+keyboard. 8. REAPER API from VST3. 9. "Auto" indicator. 10. Macro parameters.
+11. Checks.
 
-## 1. Зачем это доступности
+## 1. Why this matters
 
-Пользователь REAPER + OSARA часто управляет плагином без его окна: через
-список параметров FX (OSARA читает имя и текст значения каждого параметра)
-и через огибающие автоматизации. Значит, параметры хоста — это второй
-интерфейс, и он должен быть таким же понятным, как сетка в редакторе.
+REAPER + OSARA users often control a plugin without its window: through the FX
+parameter list (OSARA reads each parameter's name and value text) and through
+automation envelopes. Host parameters are a second user interface and must be as clear
+as the editor.
 
-## 2. ID и порядок
+## 2. IDs and order (PAR-01)
 
-- Каждый параметр — строковый ID, не зависящий от выбора в интерфейсе,
-  перевода, видимости, загруженных файлов или порядка в сетке. Схема
-  LSampler-24: `global_<ключ>`, `slot01_<ключ>`, `slot01_loop03_<ключ>`,
-  `slot01_slice_<ключ>`, `slot01_sample05_velocity_low`.
-- Новые параметры — **только в конец** списка регистрации. Не вставлять, не
-  переупорядочивать, не удалять, не переиспользовать старый ID, не менять
-  смысл и диапазон. Иначе у пользователя сломается автоматизация в старых
-  проектах.
-- VST3 в JUCE превращает строковый ID в 31-битный хеш; clap-juce-extensions
-  использует тот же хеш для CLAP. Коллизия хешей = два параметра с одним ID у
-  хоста. Проверяй скриптом (хеш JUCE: `h = (31*h + код символа) & 0xffffffff`
-  по символам, затем `& 0x7fffffff`; см. `Tools/verify-vst3-automation-source.py`
-  в LSampler-24).
-- Замораживай список: JSON-манифест (id, имя, min, max, default) в
-  репозитории и скрипт, который сверяет количество, уникальность и порядок.
-- `ParameterID{ id, versionHint }` — подсказка версии для AU; при
-  добавлении параметров в новой версии указывай новую подсказку.
+- Every parameter has a string ID independent of UI selection, language, visibility,
+  loaded files and grid order. LSampler-24 scheme: `global_<key>`, `slot01_<key>`,
+  `slot01_loop03_<key>`, `slot01_slice_<key>`, `slot01_sample05_velocity_low`.
+- New parameters only at the END of the registration list. Never insert, reorder,
+  delete, reuse an old ID, or change meaning or range: old projects would lose their
+  automation. If a range must change, migrate stored state and warn the user (TEST145
+  moved Decay from percent to ms with a schema version).
+- JUCE's VST3 wrapper turns the string ID into a 31-bit hash; clap-juce-extensions uses
+  the same hash for CLAP. Hash collision = two parameters with one host ID. The audit
+  script checks literal IDs in the source; IDs built at run time need a manifest:
+  `python scripts/a11y_audit.py Source --param-ids manifest.json` (JUCE hash: h = 31*h +
+  code point over the string, uint32, then & 0x7fffffff).
+- Freeze the list: a JSON manifest (id, name, min, max, default) in the repository and a
+  script that checks count, uniqueness and order on every build.
+- `ParameterID{ id, versionHint }`: the version hint is for AU; new parameters in a new
+  version get a new hint.
 
-## 3. Имена, тексты, единицы
+## 3. Names, texts, units (PAR-02)
 
-- Имя хоста понятно вне контекста окна: «Slot 2 - Filter Cutoff», «Bank
-  Macro - Level». Длинные имена DAW обрежет — главное в начале.
-- `getText(value)` возвращает то же, что сетка: подпись варианта («Round
-  Robin»), число с разумной точностью; единица — в `getLabel()` /
-  `withLabel("dB")`.
-- `getValueForText(text)` разбирает подписи вариантов и числа (OSARA и
-  REAPER позволяют ввести значение текстом).
-- Логические параметры — `isBoolean()` true только для настоящих Off/On.
-- Дискретные — правильный `getNumSteps()` (максимум − минимум + 1), иначе
-  хост и OSARA шагают по 1% и попадают «между» вариантами.
-- Не переосмысливай диапазоны ради красоты: если DSP хранит cutoff как 0..1
-  с логарифмической картой, хост видит 0..1 и текст в Гц, а не новый
-  диапазон 20..22000.
+- Host names make sense outside the window: "Slot 2 - Filter Cutoff", "Bank Macro -
+  Level". Hosts truncate long names: main part first.
+- `getText(value)` returns what the editor shows: option labels ("Round Robin"), numbers
+  with sensible precision; the unit in `getLabel()` / `withLabel("dB")`.
+- `getValueForText(text)` parses option labels and numbers (OSARA and REAPER let users
+  type a value).
+- `isBoolean()` true only for real Off/On.
+- Discrete parameters: correct `getNumSteps()` (max - min + 1), or hosts and OSARA step by
+  1% and land between options.
+- Do not reshape ranges for looks: if DSP stores cutoff as 0..1 with a log map, the host
+  sees 0..1 and text in Hz, not a new 20..22000 range.
 
-## 4. Что выставлять хосту
+## 4. What to expose (PAR-05)
 
-Выставляй музыкальные и DSP-параметры. Не выставляй:
-- операции над файлами, браузеры, загрузку/сохранение;
-- выбор текущего элемента, страницу, фокус, позицию курсора;
-- разрушающие команды (обрезка, нормализация в буфер), копирование,
-  отмену;
-- то, что запускает тяжёлый анализ всего сэмпла (пороги со сканированием
-  аудио) — такие правки остаются операцией редактора;
-- «универсальный параметр выбранного контрола» — он меняет смысл.
+Expose musical and DSP parameters. Do not expose:
+- file operations, browsers, load/save;
+- current selection, page, focus, cursor position;
+- destructive commands (trim, normalize into the buffer), copy, undo;
+- edits that trigger heavy whole-sample analysis (thresholds that scan audio): keep
+  them editor operations;
+- a "parameter of the selected control": its meaning changes.
 
-Многослотовые плагины: параметр привязан к конкретному слоту, а не к
-«текущему», иначе автоматизация будет прыгать при смене выбора.
+Multi-slot plugins: a parameter belongs to a fixed slot, never to "the current one", or
+automation jumps when the selection changes.
 
-## 5. Потоки и жесты
+## 5. Threads and gestures (PAR-03)
 
-- Значение параметра — атомик (лучше `std::atomic<double>` с каноническим
-  значением, без потери точности через float). `setValue` от хоста только
-  кладёт значение и увеличивает счётчик ревизии. Никаких блокировок,
-  сообщений, уведомлений хоста, работы с файлами и аудиоданными.
-- Аудиопоток раз в блок сравнивает ревизии и перестраивает только
-  изменившиеся части состояния в заранее выделенной памяти.
-- Изменение из интерфейса = жест: `beginChangeGesture()`, новое значение,
-  `endChangeGesture()`. Для клавиатуры — жест на каждое нажатие. Для
-  перетаскивания мышью — один жест на всё перетаскивание.
-- Уведомлять хоста только из потока сообщений. Если значение поменялось в
-  фоновом потоке (загрузка пресета) — отметь «нужно уведомить» и вызови
-  `AsyncUpdater`; в обработчике отправь **последнее** значение, а не
-  сохранённое старое (иначе устаревшая правка перезапишет автоматизацию).
-- Восстановление состояния (setStateInformation, загрузка пресета) — без
-  жестов: значения публикуются без «касания», чтобы DAW не записала их как
-  автоматизацию.
+- A parameter value is an atomic (preferably the canonical `std::atomic<double>`). A host
+  `setValue` only stores the value and bumps a revision counter: no locks, messages, host
+  notifications, files or audio data.
+- The audio thread compares revisions once per block and rebuilds only what changed, in
+  pre-allocated memory.
+- A change from the UI is a gesture: `beginChangeGesture()`, value, `endChangeGesture()`.
+  Keyboard: one gesture per key press. Mouse drag: one gesture for the whole drag.
+  `a11y::setByUser` does the keyboard case.
+- Notify the host only from the message thread. If a value changed on a background thread
+  (preset load), mark "needs notify" and use an AsyncUpdater; send the LATEST value then,
+  not a stored old one (an outdated value would overwrite automation).
+- Restoring state (setStateInformation, preset load) without gestures: values are
+  published without "touching", so the DAW does not record them as automation.
 
-## 6. Синхронизация без «эха»
+## 6. Sync without echo (PAR-04)
 
-Когда хост меняет параметр, контрол на экране обновляется. Если контрол
-при этом вызывает свой `onValueChange`, он отправит значение обратно хосту
-с жестом — получится «эхо», лишняя запись автоматизации и лишняя озвучка.
-Решение (ToneTrace): флаг `syncingFromHost`:
+When the host changes a parameter, the control on screen updates. If the control then
+fires `onValueChange`, it sends the value back with a gesture: an echo, an extra
+automation write and extra speech. Fix (ToneTrace):
 
 ```cpp
 void setFromHost (double v)
@@ -94,92 +86,93 @@ void setFromHost (double v)
     const juce::ScopedValueSetter<bool> guard (syncingFromHost, true);
     setValue (v, juce::sendNotificationSync);
 }
-// в onValueChange: if (syncingFromHost) return;
+// in onValueChange: if (syncingFromHost) return;
 ```
 
-Изменения от автоматизации не озвучиваются: пользователь узнает актуальное
-значение по запросу (живой title, NVDA+Стрелка вверх).
+Host and automation changes are never announced: the user gets the current value on
+request (live title, NVDA+Up Arrow).
 
-## 7. Автоматизация с клавиатуры (Ctrl+Shift+A)
+## 7. Automation from the keyboard
 
-Зрячий пользователь шевелит ручку мышью — и REAPER знает «последний
-тронутый параметр». С клавиатуры нужен явный способ. Схема LSampler-24:
+A sighted user moves a knob with the mouse and REAPER knows the "last touched
+parameter". From the keyboard an explicit command is needed. LSampler-24:
 
-1. Определи параметр хоста, соответствующий текущей строке сетки (одна
-   функция-карта для всех экранов, чтобы «коснуться» и «показать
-   огибающую» указывали на один ID).
-2. Если доступно API REAPER (раздел 8) — переключи огибающую: ACTIVE,
-   VISIBLE, ARM.
-3. Иначе спроси у хоста контекстное меню параметра
-   (`getHostContext()->getContextMenuForParameter(param)`,
-   `getEquivalentPopupMenu()`) и найди **ровно одну** доступную команду
-   активации/деактивации огибающей; выполни её `item.action()`, пока объект
-   меню жив. Пункты «Show/Hide» не годятся: скрытая, но активная огибающая
-   продолжает управлять параметром, и пользователь «не может» его менять.
-   Игнорируй «write», «record», «learn», «mode», «arm», «all automation».
-4. Если ничего надёжного нет — отправь «касание»: `beginChangeGesture()`,
-   `sendValueChangedMessageToListeners(getValue())`, `endChangeGesture()`
-   (значение не меняется) и скажи: «Direct automation toggle unavailable.
-   Last touched: Slot 1 - Volume». В REAPER пользователь может назначить
-   клавишу действию «Show/hide envelope for last touched FX parameter».
-5. Для «Set All»-режимов и других неавтоматизируемых строк — объясни, что
-   делать вместо этого («Use Alt+U for Relative macro automation»).
+**Ctrl+Shift+A: toggle the envelope of the current parameter.**
+1. Map the current grid row to its host parameter (one mapping function for all screens,
+   so "touch" and "show envelope" point to the same ID).
+2. If the REAPER API is available (section 8): toggle the envelope (ACTIVE, VISIBLE,
+   ARM).
+3. Otherwise ask the host for the parameter's context menu
+   (`getHostContext()->getContextMenuForParameter(param)`, `getEquivalentPopupMenu()`)
+   and find EXACTLY ONE item that activates or deactivates the envelope; run its
+   `item.action()` while the menu object is alive. "Show/Hide" items do not count: a
+   hidden but active envelope still controls the parameter, and the user "cannot" change
+   it. Ignore "write", "record", "learn", "mode", "arm", "all automation".
+4. If nothing reliable exists, send a touch: `beginChangeGesture()`,
+   `sendValueChangedMessageToListeners(getValue())`, `endChangeGesture()` (value
+   unchanged) and say "Direct automation toggle unavailable. Last touched: Slot 1 -
+   Volume". In REAPER users can bind a key to "Show/hide envelope for last touched FX
+   parameter".
+5. For "Set All" modes and other non-automatable rows, say what to do instead ("Use
+   Alt+U for Relative macro automation").
 
-## 8. REAPER API из VST3
+**Alt+Shift+A: deactivate all active envelopes of this instance (TEST158).**
+- Only this plugin instance (verified as in section 8); if the instance cannot be
+  identified safely, change nothing and say so.
+- Only ACTIVE envelopes; points are kept; never create or delete lanes.
+- One result message: "No active automations", "Disabled 1 automation", "Disabled 5
+  automations", plus the number of failures if any.
 
-REAPER даёт VST3-плагинам интерфейс `IReaperHostApplication`
-(IID `79655E36-77EE-4267-A573-FEF74912C27C`, из `reaper_vst3_interfaces.h`
-REAPER SDK). В JUCE его получают через `VST3ClientExtensions`:
-переопредели `getVST3ClientExtensions()` у процессора и в
-`setIHostApplication(FUnknown*)` сделай `queryInterface` по этому IID.
+**Shift+arrows in the grid: jump between parameters with an active envelope (TEST134).**
 
-- В C++ нужны обе строки: `DECLARE_CLASS_IID(IReaperHostApplication, …)` и
-  затем `DEF_CLASS_IID(IReaperHostApplication)`; без DECLARE MSVC не
-  находит `IReaperHostApplication_iid` (TEST117).
-- Функции берутся по имени: `getReaperApi("GetFXEnvelope")` и т.д.
-- **Своя дорожка, свой экземпляр.** Перед любым действием убедись, что
-  работаешь со своим FX: `getReaperParent(1)` даёт трек этого экземпляра;
-  `GetTouchedOrFocusedFX` даёт трек/FX в фокусе; трек должен совпасть;
-  имя параметра `TrackFX_GetParamName` по индексу должно совпасть с
-  именем твоего параметра. Иначе ничего не делай — при нескольких
-  экземплярах плагина легко изменить чужой.
-- Огибающая: `GetFXEnvelope(track, fx, param, create)`;
-  `GetSetEnvelopeInfo_String(env, "ACTIVE"/"VISIBLE"/"ARM", buf, set)`.
-  Включение: ACTIVE=1, VISIBLE=1, ARM=1. Выключение: ACTIVE=0, ARM=0,
-  VISIBLE=0 — точки огибающей сохраняются. Сначала ACTIVE: невидимая
-  активная огибающая — не выключенная.
-- После изменения: `TrackList_AdjustWindows(false)`, `UpdateArrange()`.
-- Для CLAP у REAPER есть собственное расширение хоста для доступа к API;
-  проверяй по документации REAPER SDK, этот путь в исходных проектах не
-  испытан.
+## 8. REAPER API from VST3 (PAR-08)
 
-## 9. Индикатор «Auto»
+REAPER gives VST3 plugins the `IReaperHostApplication` interface (IID
+`79655E36-77EE-4267-A573-FEF74912C27C`, from `reaper_vst3_interfaces.h` in the REAPER
+SDK). In JUCE get it through `VST3ClientExtensions`: override `getVST3ClientExtensions()`
+in the processor and `queryInterface` that IID in `setIHostApplication(FUnknown*)`.
 
-- К строке сетки добавляй «, Auto», только если хост подтвердил, что
-  огибающая активна (REAPER ACTIVE=1 или однозначный пункт меню
-  «Deactivate …»). Неизвестно — ничего не добавляй.
-- Опрашивай только выбранный параметр, не чаще раза в секунду и только
-  когда окно плагина в фокусе.
-- Индикатор — часть постоянной строки (title), а не отдельное сообщение.
+- C++ needs both lines: `DECLARE_CLASS_IID(IReaperHostApplication, ...)` and then
+  `DEF_CLASS_IID(IReaperHostApplication)`; without DECLARE, MSVC cannot find
+  `IReaperHostApplication_iid` (TEST117).
+- Functions by name: `getReaperApi("GetFXEnvelope")` and so on.
+- **Own track, own instance.** Before any action make sure it is this FX:
+  `getReaperParent(1)` gives this instance's track; `GetTouchedOrFocusedFX` gives the
+  focused track/FX; the tracks must match; `TrackFX_GetParamName` at the index must match
+  your parameter name. Otherwise do nothing: with several instances it is easy to change
+  someone else's.
+- Envelope: `GetFXEnvelope(track, fx, param, create)`;
+  `GetSetEnvelopeInfo_String(env, "ACTIVE"/"VISIBLE"/"ARM", buf, set)`. On: ACTIVE=1,
+  VISIBLE=1, ARM=1. Off: ACTIVE=0, ARM=0, VISIBLE=0; points are kept. ACTIVE first: an
+  invisible active envelope is not off (TEST116).
+- Afterwards: `TrackList_AdjustWindows(false)`, `UpdateArrange()`.
+- CLAP: REAPER has its own host extension for API access; check the REAPER SDK, not tested
+  in the source projects.
 
-## 10. Макро-параметры
+## 9. "Auto" indicator (PAR-06)
 
-Пример LSampler-24 (Bank Macro): одна ручка смещает параметр во всех
-непустых слотах.
-- Отдельные параметры хоста в конце списка, значение — смещение (0 —
-  нейтрально), накладывается на значение слота в аудиопотоке без
-  перезаписи самих слотов.
-- Озвучка показывает результат, а не сырое смещение: если у всех слотов
-  итог одинаковый — «On, next option by 1» / «-3 dB, decrease by 3 dB»;
-  если разный — «Mixed values, increase by 3 dB».
-- Режим «Set All» (записать всем одно значение) — разовая операция, не
-  автоматизация; объясняй это при попытке Ctrl+Shift+A.
+- Append ", Auto" to a grid row only if the host confirmed the envelope is active (REAPER
+  ACTIVE=1, or one unambiguous "Deactivate ..." menu item). Unknown: add nothing.
+- Poll only the selected parameter, at most once a second, only while the plugin window
+  has focus.
+- The indicator is part of the row (title), not a separate message.
 
-## 11. Проверки
+## 10. Macro parameters
 
-- Скрипт: число параметров, уникальные ID и хеши, префиксы, отсутствие
-  запрещённых (выбор/фокус/пороги), что колбэк `storeReal`/`setValue` не
-  содержит блокировок, `new`, файлов, `callAsync`, уведомлений хоста.
-- Ручная: в REAPER открыть список параметров (или OSARA FX parameters),
-  проверить имена и тексты значений; записать и воспроизвести огибающую;
-  Ctrl+Shift+A дважды; два экземпляра плагина на разных треках.
+LSampler-24 Bank Macro: one knob offsets a parameter in every non-empty slot.
+- Separate host parameters at the end of the list; the value is an offset (0 = neutral)
+  applied to the slot value on the audio thread without overwriting the slots.
+- Speech shows the result, not the raw offset: same result everywhere: "On, next option
+  by 1" / "-3 dB, decrease by 3 dB"; different: "Mixed values, increase by 3 dB"
+  (TEST120).
+- "Set All" (write one value to all) is a one-off operation, not automation; explain
+  this on Ctrl+Shift+A.
+
+## 11. Checks
+
+- Script: count, unique IDs and hashes, prefixes, no forbidden parameters
+  (selection/focus/thresholds), the `setValue` callback without locks, `new`, files,
+  `callAsync`, host notifications. `a11y_audit.py --param-ids` checks IDs and hashes.
+- Manual: REAPER parameter list (or OSARA "FX parameters"): names and value texts; type a
+  value; record and play an envelope; Ctrl+Shift+A twice; two instances on different
+  tracks; CLAP and VST3 separately.

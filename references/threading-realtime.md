@@ -1,79 +1,71 @@
-# Потоки, реальное время, жизненный цикл редактора
+# Threads, real time, editor lifetime
 
-Почему это в навыке о доступности: зависание REAPER или NVDA на 20 секунд
-при закрытии окна плагина (TEST104) или треск звука делают плагин
-непригодным так же, как молчащий скринридер. А падение при закрытии
-диалога лишает незрячего пользователя проекта, который он даже не видел.
+Why this is part of accessibility: a 20-second freeze of REAPER and NVDA when closing the
+plugin window (LSampler-24 TEST104), or crackling audio, makes a plugin as unusable as a
+silent screen reader. A crash after closing a dialog costs a blind user a project they
+could not even see.
 
-## 1. Аудиопоток (`processBlock`)
+## 1. Audio thread (processBlock), RT-01
 
-Запрещено: озвучка и любые вызовы доступности, `MessageManager`,
-`callAsync`, блокировки (`ScopedLock`), выделение памяти (`new`,
-`make_shared`, рост `std::vector`, создание `juce::String`), файлы, разбор
-XML/ValueTree, уведомления хоста.
+Forbidden: speech and any accessibility call, MessageManager, callAsync, locks
+(ScopedLock), allocation (new, make_shared, growing a std::vector, creating a
+juce::String), files, XML/ValueTree parsing, host notifications, logging.
 
-Разрешено: атомики, заранее выделенные буферы, обмен готовыми
-«снимками» состояния.
+Allowed: atomics, pre-allocated buffers, swapping ready-made state snapshots.
 
-Паттерны LSampler-24:
-- **Тройной буфер снимков.** Поток управления собирает состояние в
-  «пишущий» буфер и атомарно меняет его со «средним» (флаг «новый» живёт в
-  том же атомике, что индекс). Аудиопоток забирает «средний», когда видит
-  флаг. Старые сэмплы освобождаются потоком управления, не аудиопотоком.
-- **Команды через атомики:** `requestPreviewStart(slot)`,
-  `requestPreviewStop()` — GUI кладёт команду, аудиопоток её выполняет.
-  Связанные поля упаковывай в одно атомарное значение, чтобы они не
-  «разорвались» (slot + вид + элемент).
-- **Покой:** если нет голосов, MIDI и команд — очистить выход и выйти,
-  ничего не считая. Но любые команды прослушивания и MIDI будят блок.
-- **Наблюдение для GUI** (метры) — отдельные атомики, которые аудиопоток
-  только пишет, а GUI читает и обнуляет.
+LSampler-24 patterns:
+- **Triple-buffered snapshots.** The control thread builds the state in a "write" buffer
+  and atomically swaps it with the "middle" one (the "new" flag lives in the same atomic
+  as the index). The audio thread takes the middle buffer when it sees the flag. Old
+  samples are freed by the control thread, never by the audio thread.
+- **Commands through atomics:** `requestPreviewStart(slot)`, `requestPreviewStop()`. The
+  GUI stores a command, the audio thread runs it. Pack related fields into one atomic so
+  they cannot tear (slot + kind + item).
+- **Idle:** no voices, MIDI or commands: clear the output and return. Preview commands and
+  MIDI wake the block up. Skip unchanged state sync during idle (TEST140 to TEST142).
+- **Observation for the GUI** (meters): separate atomics the audio thread only writes and
+  the GUI reads and resets.
 
-## 2. Поток управления и фоновые задачи
+## 2. Control thread and background jobs, RT-07
 
-- Тяжёлое (декодирование, SHA-256, копирование, архивы) — в
-  `juce::ThreadPool` из одного потока низкого приоритета; одна задача за
-  раз (`compare_exchange` на флаге «занято»). В JUCE 9 функция для
-  `addJob` должна возвращать `void` или `ThreadPoolJob::JobStatus`.
-- Результат возвращается через `MessageManager::callAsync` с проверкой
-  «процессор ещё жив» (флаг завершения) и `SafePointer` редактора.
-- Деструктор процессора ставит флаг завершения и дожидается задачи.
-  Закрытие окна плагина задачу не ждёт: редактор при повторном открытии
-  видит, что задача идёт, и показывает прогресс.
-- Кешируй дорогие вычисления, которые хост может вызывать синхронно
-  (`getStateInformation` при закрытии окна или сохранении проекта): в
-  LSampler-24 пересчёт SHA-256 всех 384 WAV при каждом сохранении состояния
-  подвешивал REAPER и NVDA (TEST104), кеш по пути+размеру+дате это убрал.
+- Heavy work (decoding, SHA-256, copying, archives) in a `juce::ThreadPool` with one
+  low-priority thread; one job at a time (`compare_exchange` on a "busy" flag). In JUCE 9
+  the function given to `addJob` must return `void` or `ThreadPoolJob::JobStatus`.
+- The result returns via `MessageManager::callAsync`, checking that the processor is still
+  alive (shutdown flag) and holding the editor's SafePointer.
+- The processor destructor sets the shutdown flag and waits for the job. Closing the
+  editor does not wait: when it opens again it sees the job and shows progress.
+- Cache expensive results the host may request synchronously (`getStateInformation` on
+  save or close): recomputing SHA-256 of 384 WAV files froze REAPER and NVDA (TEST104); a
+  cache by path + size + date fixed it (PAR-07).
 
-## 3. Безопасные асинхронные вызовы в GUI
+## 3. Safe asynchronous GUI calls, RT-02 to RT-05
 
-- Всегда `juce::Component::SafePointer` в лямбдах `callAsync`,
-  `Timer::callAfterDelay`, `launchAsync`, `showMenuAsync`,
-  `enterModalState`. Голый `this` = падение, если пользователь закрыл окно
-  плагина, пока ждал диалог.
-- **Не удаляй компонент внутри его собственного `keyPressed`.** Закрытие
-  модального редактора по Escape: в обработчике только
-  `MessageManager::callAsync(…closeEditor…)`.
-- **Сначала закрой временный TextEditor, потом прячь/перестраивай его
-  владельца.** Поле точного ввода у `Slider` — дочерний TextEditor; если
-  спрятать или перезаполнить слайдер, пока поле в фокусе, в REAPER были
-  падения. Порядок: применить текст → `hideTextBox(discard)` →
-  `callAsync(следующее действие)`.
-- Колбэк хоста (`getContextMenuForParameter`) вызывай и выполняй в потоке
-  сообщений, пока объект меню жив.
+- Always `juce::Component::SafePointer` in lambdas for `callAsync`,
+  `Timer::callAfterDelay`, `launchAsync`, `showMenuAsync`, `enterModalState`. A raw
+  `this` crashes the DAW if the user closed the plugin window while a dialog was open.
+- **Never delete, reset or rebuild components inside their own keyPressed (RT-03).**
+  Closing a modal editor with Escape: only `MessageManager::callAsync(... close ...)` in the
+  handler. Opening or closing a view that recreates a ComboBox during the key dispatch
+  crashed REAPER (TEST152): defer it until the key press has finished.
+- **Close a temporary TextEditor before hiding or refilling its owner (RT-04).** The
+  entry field of a Slider is a child TextEditor; hiding or repopulating the slider while
+  the field has focus crashed REAPER. Order: apply the text, move focus,
+  `hideTextBox(discard)`, then `callAsync(next step)`.
+- **Repopulating lists (RT-05):** `dontSendNotification`, a re-entrancy guard against
+  onChange/onValueChange, reset auxiliary indexes before leaving a mode, explicit bounds
+  checks (TEST152).
+- Host callbacks (`getContextMenuForParameter`) run on the message thread, and their
+  results are used while the menu object is alive.
 
-## 4. Жизненный цикл редактора
+## 4. Editor lifetime
 
-- Конструктор: настроить компоненты, восстановить память курсора из
-  процессора (не перезаписывать её значениями по умолчанию при
-  инициализации — баг TEST45), отложить предупреждения
-  (`callAsync`), чтобы у модального окна был родитель.
-- Таймер 10 Гц: проверка ревизии состояния → обновить только изменившееся;
-  проверка фокуса окна → остановить прослушивания при уходе; прогресс
-  фоновой задачи.
-- Деструктор: остановить все прослушивания, закрыть модальные экраны,
-  снять LookAndFeel со всех компонентов (`setLookAndFeel(nullptr)`), до
-  уничтожения самих LookAndFeel.
-- Состояние только для интерфейса (позиция курсора, режим прослушивания)
-  живёт в памяти процессора или в пользовательских настройках, но не в
-  пресете и не в проекте — если пользователь не просил иного.
+- Constructor: set up components, restore cursor memory from the processor (never
+  overwrite it with defaults during initialisation, TEST45), defer warnings and the first
+  focus (callAsync) so modal windows have a parent and focus works (FOC-04).
+- 10 Hz timer: check the state revision and update only what changed; check window focus
+  and stop previews when it is lost; show background job progress.
+- Destructor: stop all previews, close modal screens, `setLookAndFeel(nullptr)` on every
+  component before the LookAndFeel objects are destroyed (RT-06).
+- UI-only state (cursor position, preview mode) lives in processor memory or user
+  settings, not in presets or the project, unless the user asks otherwise (RT-08).

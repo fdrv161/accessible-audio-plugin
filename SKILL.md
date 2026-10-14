@@ -1,205 +1,208 @@
 ---
 name: accessible-audio-plugin
 description: >
-  Создание, доработка и аудит аудиоплагинов VST3 и CLAP (JUCE, C++), полностью
-  доступных для незрячих: работа со скринридерами NVDA, JAWS, Экранный диктор
-  (Narrator), VoiceOver и с REAPER + OSARA, полное управление с клавиатуры,
-  озвучка значений и результатов, доступная автоматизация параметров.
-  Используй этот навык ВСЕГДА, когда речь идёт о плагине, VST, VST3, CLAP, AU,
-  JUCE-редакторе, DAW или REAPER и при этом упоминается доступность,
-  accessibility, a11y, скринридер, NVDA, JAWS, OSARA, незрячий пользователь,
-  клавиатурная навигация, озвучка или «чтобы было удобно со скринридером» —
-  даже если слово «доступность» не сказано прямо (например «NVDA молчит в
-  моём плагине», «сделай синт, которым можно пользоваться вслепую», «фокус
-  улетает в REAPER», «сообщения читает только Экранный диктор», «добавь CLAP к
-  моему доступному VST3»). Также используй для ревью чужого JUCE-кода на
-  доступность и для переноса недоступного GUI плагина на доступный.
+  Build, fix and audit VST3/CLAP/AU audio plugins in JUCE (C++) so blind musicians can
+  use them fully with NVDA, JAWS, Narrator, VoiceOver and REAPER + OSARA: keyboard-only
+  control, focus that never gets lost, short spoken feedback, readable host parameters
+  and automation. Use whenever a plugin, VST, VST3, CLAP, AU, JUCE editor, DAW or REAPER
+  comes up together with accessibility, a11y, screen readers, NVDA, JAWS, Narrator,
+  OSARA, blind users, keyboard navigation or speech, even indirectly: "NVDA is silent in
+  my plugin", "focus jumps to REAPER", "a Windows voice speaks instead of NVDA", or in
+  Russian «NVDA молчит в плагине», «сделай синт для незрячих», «фокус улетает в REAPER»,
+  «сообщения читает только Экранный диктор», «доступность плагина», «скринридер».
+  Also use to review JUCE code for accessibility and to retrofit an inaccessible
+  custom-drawn GUI.
 ---
 
-# Доступные аудиоплагины VST3 / CLAP
+# Accessible audio plugins (JUCE, VST3/CLAP)
 
-Навык собран из двух реальных проектов:
+Goal: a blind musician does everything a sighted one does, with the keyboard only,
+hears short useful speech, never loses focus, and never triggers DAW actions by accident.
 
-- **LSampler-24** — JUCE-сэмплер (VST3), в котором за 120 итераций с
-  пользователем NVDA в REAPER отлажены: озвучка, фокус, клавиатурная модель,
-  модальные экраны, браузеры файлов, 6 700 параметров автоматизации и
-  интеграция с REAPER. Это эталон поведения.
-- **ToneTrace** — EQ (VST3 + CLAP из одного JUCE-редактора). Полезны его
-  контролы: ползунки с текстовым значением в единицах, переключатель страниц
-  с одной Tab-остановкой, синхронизация с хостом без «эха». Его минус учтён:
-  сообщения он отправлял через `AccessibilityHandler::postAnnouncement`,
-  а на Windows JUCE произносит их голосом SAPI (звучит как Экранный диктор),
-  мимо NVDA и JAWS.
+Sources of this skill: LSampler-24 (JUCE sampler, 159 iterations with an NVDA user in
+REAPER: the reference behaviour), ToneTrace (EQ, VST3 + CLAP), Surge XT (overlays,
+announcement window, control groups) and OSARA (REAPER's screen-reader extension:
+UIA notifications, JAWS fallback).
 
-Сведения о внешних проектах проверены в октябре 2026: JUCE 9.0.3 (на
-Windows `postAnnouncement` всё ещё говорит через SAPI, штатного CLAP нет),
-clap-juce-extensions (поддерживает JUCE 9), NVDA 2026.2. Если с тех пор
-прошло много времени, перепроверь эти факты перед тем, как на них опираться.
+## Ground rules
 
-Цель: незрячий музыкант делает в плагине **всё** то же, что зрячий, только
-клавиатурой, слышит коротко и по делу, никогда не теряет фокус и не
-«проваливается» в DAW случайным нажатием.
+1. **One message, one channel.** Focus changes and value changes of real controls speak
+   by themselves; announce only what they do not say. Never two channels for one event
+   (SPK-03).
+2. **Announce through the notification window** (templates/ScreenReaderAnnouncer). Never
+   `postAnnouncement` on Windows: a separate SAPI voice, NVDA and JAWS hear nothing
+   (SPK-01).
+3. **State in titles, messages in speech.** Title = short current state ("Cutoff,
+   1200 Hz"), live via `getTitle()`. Description = shortcut only. Never store messages
+   in properties (SPK-04).
+4. **Say little.** Navigation "Name, value"; change: value only; no role words; options by
+   label; edges silent; impossible actions say why.
+5. **Focus is always meaningful.** On open: the first working element. On close: back
+   where the user came from. Move focus before hiding anything (FOC-01 to FOC-03).
+6. **The plugin owns its keys.** Every key a plugin screen uses is consumed, modal screens
+   consume everything including key releases; Space on the main screen, Alt+F4, Alt+Tab
+   and screen-reader keys go through (KEY-02, KEY-07, KEY-08).
+7. **One key model everywhere**, exact modifier matching, Shift+F10 for every context
+   menu (keyboard-model.md).
+8. **Graphics are for eyes only.** Displays are excluded from accessibility; everything
+   they show exists as text.
+9. **Host parameters are a second UI.** Clear names, units, option labels, stable IDs,
+   gestures (parameters-automation.md).
+10. **The audio thread is untouchable.** No speech, locks, allocation, files or messages in
+    processBlock; long work in the background with text progress.
+11. **Never invent host state.** Say only what the DAW confirmed.
+12. **Honest report.** What was verified by test, by script, by reading code, and what
+    needs a person with a screen reader.
 
-## Главные принципы (и почему)
+## Workflow
 
-1. **Одна озвучка — один путь.** На Windows озвучивай через событие UI
-   Automation `UiaRaiseNotificationEvent` на реальном элементе окна плагина
-   (шаблон `assets/templates/ScreenReaderAnnouncer.*`). Не используй
-   `juce::AccessibilityHandler::postAnnouncement` на Windows: NVDA/JAWS его не
-   слышат. Не дублируй сообщение вторым каналом — фразы налезают друг на друга.
-2. **Постоянная строка и временное сообщение — разные вещи.** Заголовок
-   (`setTitle`) элемента — это то, что NVDA читает по NVDA+Стрелка вверх; он
-   короткий и всегда актуальный («Cutoff, 1200 Hz»). Сообщения вроде «Slot 3
-   cleared» говори через анонсер и не записывай в title/description, иначе
-   они «прилипнут» к элементу.
-3. **Говори минимум.** Сначала то, что изменилось: при навигации «Имя,
-   значение», при изменении — только новое значение. Без слов «кнопка»,
-   «параметр» (роль скринридер добавит сам), без повторов, без звуков на
-   каждой точке автоматизации.
-4. **Край списка — тишина.** Нет перехода с последнего на первый, нет
-   «конец списка». Но если действие вообще невозможно, скажи почему
-   («Only one loaded slot», «No sample loaded»).
-5. **Фокус всегда осмыслен и предсказуем.** При открытии экрана фокус на
-   первом рабочем элементе и одна вводная фраза; при закрытии — возврат туда,
-   откуда пришли. Никогда не оставляй фокус на скрытом или выключенном
-   элементе.
-6. **Модальный экран съедает все клавиши.** Иначе стрелки, буквы и пробел
-   уйдут в REAPER и запустят его действия. Наоборот, на главной странице
-   пробел по умолчанию отдай DAW (транспорт), пока пользователь сам не
-   включит режим прослушивания.
-7. **Единая клавиатурная модель во всём плагине** (сетка параметров,
-   Alt+стрелки для значения, Enter — точный ввод, поиск по первой букве).
-   Выучил один экран — умеешь все. Подробно: `references/keyboard-model.md`.
-8. **Графика — только для глаз.** Осциллограммы, метры, декоративные панели:
-   `setAccessible(false)`, без фокуса и без мыши. Всё, что они показывают,
-   доступно текстом в другом месте (свойства, строка состояния).
-9. **Параметры хоста — второй доступный интерфейс.** Многие слушают плагин
-   через список параметров REAPER/OSARA. Понятные имена, единицы, подписи
-   вариантов (`getText`/`getValueForText`), стабильные ID, жесты begin/end.
-10. **Звуковой поток неприкосновенен.** В `processBlock` нет озвучки, файлов,
-    блокировок, выделения памяти и сообщений. Долгие операции — в фоновом
-    потоке с текстовым прогрессом.
-11. **Не выдумывай состояние хоста.** Если DAW не подтвердила (например, что
-    дорожка автоматизации активна), не говори этого.
-12. **Честный отчёт.** Пиши, что проверено автоматически, что только по
-    исходникам, а что требует ручной проверки с NVDA в DAW.
+Pick the mode. A user complaint ("NVDA is silent when...") is mode B starting from
+references/pitfalls.md.
 
-## Как работать
+### Step 0 for existing code: map the project
 
-Сначала определи режим.
+1. Build system and versions: CMakeLists.txt or .jucer, formats, JUCE version (the audit
+   prints it; below 6.1 there is no accessibility at all, BLD-02).
+2. Find the places that matter (ripgrep, from the project root):
+   - keys: `rg -n "keyPressed|keyStateChanged|addKeyListener|isCtrlDown|isCommandDown" Source`
+   - focus: `rg -n "grabKeyboardFocus|grabFocus\(|setWantsKeyboardFocus|setVisible\s*\(\s*false|removeChildComponent" Source`
+   - speech: `rg -n "postAnnouncement|UiaRaise|announce|setTitle|setDescription|notifyAccessibilityEvent" Source`
+   - custom widgets: `rg -n "void paint|mouseDown|mouseDrag|createAccessibilityHandler|setAccessible" Source`
+   - dialogs and menus: `rg -n "AlertWindow|PopupMenu|FileChooser|showMenuAsync|enterModalState|runModalLoop" Source`
+   - parameters: `rg -n "ParameterID|AudioParameter(Float|Int|Bool|Choice)|createParameterLayout|setValueNotifyingHost|beginChangeGesture" Source`
+   - threads: `rg -n "processBlock|callAsync|callAfterDelay|ThreadPool|getStateInformation" Source`
+3. Note the editor class, its key entry point, every screen (main, modal, browsers,
+   dialogs) and how each opens and closes.
 
-### A. Новый плагин
+### B. Fix an existing plugin
 
-1. Уточни: тип (инструмент/эффект), форматы (VST3, CLAP, AU), целевые DAW
-   (REAPER — почти всегда), список функций, нужна ли работа с файлами.
-2. Спроектируй **карту экранов и клавиш** до кода: главный экран, сетка
-   параметров, модальные экраны, браузеры, глобальные горячие клавиши. Проверь
-   на конфликты с REAPER и NVDA (`references/keyboard-model.md`, раздел
-   «Конфликты»). Покажи карту пользователю.
-3. Каталог параметров с постоянными ID, именами, единицами, диапазонами,
-   подписями (`references/parameters-automation.md`).
-4. Каркас: CMake + JUCE (+ CLAP), см. `references/build-vst3-clap.md`.
-5. Скопируй шаблоны из `assets/templates/` (анонсер, список-ячейка, сетка
-   параметров, модальная поверхность, ползунок с текстовым значением) и
-   адаптируй.
-6. Реализуй экраны по паттернам `references/ui-patterns.md`, озвучку и фокус —
-   по `references/announcements-and-focus.md`.
-7. Тесты клавиатурной маршрутизации и статические проверки
-   (`references/testing.md`), прогон `scripts/a11y_audit.py`.
-8. Заметка к сборке и план ручной проверки в REAPER с NVDA.
+1. **Script:** `python <skill>/scripts/a11y_audit.py Source CMakeLists.txt --format json`
+   (add `--param-ids <manifest>` if IDs are built at run time). Findings carry defect
+   IDs; details in references/audit-checklist.md.
+2. **Symptom:** if the user reported something, take the defect list for it from
+   references/pitfalls.md and check those first.
+3. **Manual hunt**, area by area in this order: BLD, FOC, KEY, SPK, CTL, DLG, PAR, RT
+   (audit-checklist.md). Then walk every screen as a user: open it, where does focus
+   land, what is spoken, each key (handler, result, speech), close, where does focus
+   return. The script misses most focus and speech logic; this walk finds it.
+4. **Prioritise:** critical (unusable: no focus, silence, keys to the DAW, mouse-only,
+   crashes), then major (double speech, lost focus after dialogs, unclear values), then
+   minor.
+5. **Fix minimally**, with the templates. Do not change without asking: DSP, parameter
+   IDs and order, state format, JUCE version, shortcuts users already know. Warn if a fix
+   touches them.
+6. **Verify:** re-run the audit (the fixed findings are gone, no new ones); build if
+   possible; key routing tests; `scripts/uia_inspect.ps1` on a running build if
+   available; write the manual steps for the user (testing.md).
+7. **Iteration note** (testing.md section 7): changed, deliberately not changed,
+   verified, steps to test by ear.
 
-### B. Исправление существующего плагина
+### A. New plugin
 
-1. Прочитай структуру проекта: редактор, контролы, параметры, CMake. Не
-   переписывай всё — исправляй точечно.
-2. Запусти статический аудит (путь к скрипту — от папки этого навыка):
-   `python <папка навыка>/scripts/a11y_audit.py <папка_исходников> [CMakeLists.txt]`.
-3. Пройди `references/audit-checklist.md` и сверься со списком известных
-   ловушек `references/pitfalls.md` — большинство багов там уже описаны.
-4. Исправляй по приоритету: (1) то, что делает плагин непригодным (нет
-   фокуса, NVDA молчит, клавиши уходят в DAW, мышь-only действия);
-   (2) путаница (длинные/двойные фразы, потеря фокуса после диалогов);
-   (3) удобство.
-5. Не меняй без явной просьбы: DSP, ID и порядок параметров хоста, формат
-   сохранения. Если правка их затрагивает — предупреди и спроси.
-6. Каждую итерацию сопровождай короткой заметкой (шаблон в
-   `references/testing.md`): что изменено, что намеренно не тронуто, что
-   проверено, что проверить руками.
+1. Clarify: instrument or effect, formats (VST3, CLAP, AU), target DAWs (REAPER almost
+   always), features, file handling.
+2. Design the **screen and key map** before code: main screen, parameter grid, modal
+   screens, browsers, global hotkeys; check conflicts with REAPER and NVDA
+   (keyboard-model.md section 7). Show the map to the user.
+3. Parameter catalog with permanent IDs, names, units, ranges, labels
+   (parameters-automation.md).
+4. Project: CMake + JUCE (+ CLAP), build-vst3-clap.md. Add Standalone for testing.
+5. Copy templates (see below) and adapt; build screens from ui-patterns.md, speech and
+   focus from announcements-and-focus.md.
+6. Key routing tests and the audit script (testing.md); uia_inspect.ps1 on the
+   Standalone build.
+7. Build note and a manual test plan for REAPER with NVDA.
 
-### C. Только аудит (без правок)
+### C. Audit only
 
-Выдай список находок по убыванию важности. Для каждой: где (файл и строка),
-что слышит/делает пользователь сейчас, почему это проблема, как исправить.
-Без таблиц — построчно, удобно для прослушивания.
+List findings by severity. For each: defect ID, file and line, what the user hears or
+does now, why it is a problem, how to fix. No tables: one finding per paragraph, easy
+to listen to.
 
-### Другие фреймворки
+### Other frameworks
 
-Навык рассчитан на JUCE: у него есть встроенный мост к UI Automation (Windows)
-и NSAccessibility (macOS). Если плагин на фреймворке без поддержки
-скринридеров, скажи об этом прямо. Минимум, который можно сделать и там:
-отличные параметры хоста (их читает OSARA и общий редактор DAW). Полноценный
-путь — перенос редактора на JUCE. Не обещай доступность, которую фреймворк не
-даёт.
+Built for JUCE (bridges to UI Automation on Windows and NSAccessibility on macOS). For
+WebView editors and frameworks without screen-reader support see ui-patterns.md
+section 15. Never promise accessibility a framework cannot give.
 
-## Справочники: что когда читать
+## Templates (assets/templates/)
 
-- `references/announcements-and-focus.md` — как и что озвучивать, title
-  против сообщений, перенос фокуса, приёмы для NVDA в REAPER. Читай всегда,
-  когда трогаешь озвучку или фокус.
-- `references/keyboard-model.md` — эталонная раскладка клавиш, сетка
-  «Сетка/Значение», поиск по букве, модальность, конфликты с REAPER/NVDA,
-  особенности клавиш JUCE на Windows.
-- `references/ui-patterns.md` — готовые паттерны экранов: список-ячейка,
-  сетка параметров, браузер файлов, свойства, диалог подтверждения, меню,
-  справка, прогресс, переключатель страниц.
-- `references/parameters-automation.md` — параметры хоста, ID, тексты
-  значений, жесты, синхронизация без «эха», OSARA, Ctrl+Shift+A и API REAPER.
-- `references/threading-realtime.md` — аудиопоток, фоновые задачи,
-  безопасные асинхронные вызовы, жизненный цикл редактора.
-- `references/build-vst3-clap.md` — CMake, JUCE, CLAP через
-  clap-juce-extensions, сборка в GitHub Actions, флаги для клавиатуры.
-- `references/testing.md` — автотесты клавиш, статические проверки, ручной
-  план с NVDA/REAPER, шаблон заметки к итерации.
-- `references/audit-checklist.md` — чек-лист для режимов B и C.
-- `references/pitfalls.md` — реальные баги из истории LSampler-24 и
-  ToneTrace с причинами и исправлениями.
+Copy the helpers together with any template that includes them: `A11yKeys.h`,
+`A11yParameters.h`, `ScreenReaderAnnouncer.h` + `.cpp` (the only .cpp).
 
-## Шаблоны (`assets/templates/`)
+- `ScreenReaderAnnouncer.h/.cpp`: `a11y::announce` and `a11y::Announcer` (delayed queue,
+  latest-wins, only-if-changed). UIA notification window on Windows (NVDA, Narrator),
+  MSAA fallback for JAWS/Dolphin, VoiceOver on macOS.
+- `A11yKeys.h`: exact modifier matching, Shift+F10 / Applications key, letter-search
+  character, search helper.
+- `A11yParameters.h`: value text with units, sensible key steps (no inaudible
+  0.01 Hz steps), gestures, strict parsing of typed values.
+- `AccessibleListCell.h`: one focusable element for a long virtual list (slots, files,
+  steps) with a live title.
+- `AccessibleParameterList.h`: accessible editor of all processor parameters (grid model,
+  exact entry, letter search, gestures). Fastest retrofit for any plugin.
+- `AccessibleOverlay.h`: `ParameterOverlay` and `ActionOverlay`, transparent focusable
+  overlays over custom-drawn knobs and buttons (retrofit without touching the GUI).
+- `TextValueSlider.h`: slider read as "+3 dB" by every screen reader.
+- `ModalKeySurface.h`: base for modal screens: consumes all keys, Escape closes
+  asynchronously, focus returns.
+- `AccessibleDialog.h`: `askForText` and `confirm` AlertWindows without double reading
+  and with the right first focus.
 
-- `ScreenReaderAnnouncer.h/.cpp` — озвучка для NVDA/JAWS/Экранного диктора
-  (UIA) и VoiceOver. Отправная точка любого проекта.
-- `AccessibleListCell.h` — один фокусируемый элемент, читающий «текущую
-  строку» виртуального списка (слоты, файлы, шаги секвенсора).
-- `AccessibleParameterList.h` — готовый доступный редактор всех параметров
-  `AudioProcessor`: навигация, изменение, поиск по букве, точный ввод,
-  жесты для автоматизации.
-- `ModalKeySurface.h` — база модального экрана: съедает клавиши, Esc
-  закрывает, фокус возвращается.
-- `TextValueSlider.h` — ползунок, который скринридер читает как «+3 dB»,
-  а не как проценты.
+The templates follow the JUCE 8/9 API but were not compiled in this repository (no
+compiler here): build them in the project and fix small differences for its JUCE version.
 
-Шаблоны написаны под JUCE 8 (в JUCE 9 используемые ими API не менялись)
-и не собирались в этом репозитории: после копирования собери проект и
-исправь мелочи под свою версию JUCE.
+## Scripts (scripts/)
 
-## Скрипт аудита
+- `a11y_audit.py`: static audit of C++ sources, CMakeLists.txt and .jucer. 32 rules with
+  defect IDs, JUCE version detection, parameter ID and hash collision check
+  (`--param-ids`), `--format json`, `--list-rules`, `--skip`/`--only`, suppression comments
+  (`// a11y-ignore: RT-02 reason`). Exit 0 no errors, 1 errors, 2 bad arguments. Plain text
+  without colours. Heuristic: it does not replace a check with a screen reader.
+- `uia_inspect.ps1` (Windows PowerShell, nothing to install): `-Mode List` finds JUCE
+  windows, `-Mode Tree` prints what screen readers get (role, name, value, states) and
+  flags unnamed focusable elements and number-only values, `-Mode Watch` logs every focus,
+  name and value change while the plugin is used. Run with
+  `powershell -ExecutionPolicy Bypass -File <skill>/scripts/uia_inspect.ps1 -Mode Tree -Process reaper`.
 
-`scripts/a11y_audit.py` — статическая проверка исходников JUCE на типичные
-ошибки доступности и реального времени. Запуск: `python <папка навыка>/scripts/a11y_audit.py
---help`. Правила: E1 postAnnouncement на Windows, E2 «Ctrl и не Command», E3 запрещённое в
-processBlock, E4 линковка UIA, W1 голый this в асинхронных лямбдах, W2 мышь без клавиатуры,
-W3 синхронные диалоги, W4 не-ASCII строки, W5 фокус без доступности, W6 сообщение в
-description, W7 кнопка-картинка без имени, W8 нет EDITOR_WANTS_KEYBOARD_FOCUS, W9 меню по
-правому клику без Shift+F10, I1 жесты,
-I2 ползунок без текста значения, I3 titleChanged. Вывод — простые строки без цвета; код выхода 0 — ошибок нет, 1 —
-найдены ошибки, 2 — неверные аргументы. Это эвристика: она находит
-подозрительные места, но не заменяет ручную проверку со скринридером.
+## References (references/)
 
-## Итоговое сообщение пользователю
+- `pitfalls.md`: symptom index: what the user hears, which defects to check. Start here
+  for complaints.
+- `audit-checklist.md`: the defect catalog (SPK, FOC, KEY, CTL, DLG, PAR, RT, BLD): what the
+  user hears, cause, fix, verification, where it was seen.
+- `announcements-and-focus.md`: speech channels, titles, what to say, moving focus,
+  REAPER and NVDA specifics. Read before touching speech or focus.
+- `keyboard-model.md`: the reference key layout, simple editors, modal screens, letter
+  search, conflicts, JUCE key quirks, key routing.
+- `ui-patterns.md`: list cell, parameter grid, controls, retrofit, browsers, dialogs,
+  menus, progress, displays, help, preview, accessibility settings, WebView.
+- `parameters-automation.md`: IDs, texts, gestures, echo, keyboard automation, REAPER API.
+- `threading-realtime.md`: audio thread, background jobs, safe async calls, lifetime.
+- `build-vst3-clap.md`: CMake, Projucer, CLAP, CI, local build.
+- `testing.md`: key routing tests, static checks, uia_inspect, keyboard diagnostic,
+  focus log, manual plan, note and bug report templates.
 
-Пиши коротко, списком, без таблиц и псевдографики (пользователь, скорее
-всего, слушает ответ скринридером). Обязательно три блока: что сделано; что
-проверено по доступности (и каким способом — тест, скрипт, чтение кода);
-что проверить руками со скринридером в DAW — конкретными шагами
-(«открой Alt+M, нажми F2, Ctrl+Стрелка вниз — NVDA должен сказать "Sample 2,
-Velocity Low, 1"»).
+## Facts that expire
+
+Checked in October 2026. Re-check when much time has passed or before a release:
+- JUCE `postAnnouncement` on Windows uses SAPI: JUCE repo,
+  `modules/juce_gui_basics/native/accessibility/juce_Accessibility_windows.cpp`, search
+  `postAnnouncement`.
+- No native CLAP in JUCE (latest tag 9.0.4, 12 October 2026): `docs/CMake API.md`, the
+  FORMATS list; tags at github.com/juce-framework/JUCE/tags.
+- clap-juce-extensions officially lists JUCE 6 to 8: its README and recent commits.
+- NVDA prefers the UIA Value text over RangeValue, and reads UIA notifications only from
+  the focused application: nvaccess/nvda, `source/NVDAObjects/UIA/__init__.py`
+  (`_get_value`, `event_UIA_notification`).
+- JAWS and Dolphin ignore UIA notifications: OSARA, `src/uia.cpp`
+  (`shouldUseUiaNotifications`).
+
+## Final message to the user
+
+Write in the user's language, short, as a list; no tables, no ASCII art (the user most
+likely listens with a screen reader). Always three blocks: what was done; what was
+verified for accessibility and how (test, script, reading code); what to check by ear
+in the DAW, as concrete steps with expected phrases ("open Alt+M, press F2, then
+Ctrl+Down Arrow: NVDA should say 'Sample 2, Velocity Low, 1'"). Name anything not
+verified (templates not compiled, JAWS fallback untested).

@@ -1,104 +1,80 @@
-# Известные ловушки (из истории LSampler-24 и ToneTrace)
+# Symptom index: from a user complaint to the defect
 
-Каждый пункт: симптом, причина, исправление. Номер TEST — итерация
-LSampler-24, где это нашли.
+Users describe what they hear, not the cause. Find the closest symptom, then check
+the defects in the listed order (most likely first). IDs are in audit-checklist.md.
 
-1. **Сообщения звучат голосом Windows, NVDA молчит** (ToneTrace).
-   Причина: `juce::AccessibilityHandler::postAnnouncement` на Windows говорит
-   через SAPI. Исправление: `UiaRaiseNotificationEvent` на элементе окна
-   (шаблон анонсера).
+## How to get a precise report
 
-2. **Одна фраза звучит дважды или обрывается** (TEST39, TEST55).
-   Причина: одновременно смена фокуса и явный анонс, или titleChanged и анонс.
-   Исправление: один канал; при переносе фокуса не анонсировать.
+Ask the user (blind users can do all of this with the keyboard):
+- Windows version, DAW and version, plugin version and format (VST3 or CLAP),
+  plugin window docked in the FX chain or floating.
+- Screen reader and version; OSARA version if REAPER.
+- Exact steps, what they expected to hear, what they heard. NVDA's Speech Viewer
+  (NVDA menu, Tools, Speech Viewer) shows the exact spoken text to copy.
+- For a silent or wrong element: NVDA+F1 on it opens the NVDA log with developer
+  info (role, name, value, UIA patterns, class name); copy the last block.
+- For keys: the plugin's keyboard diagnostic mode (testing.md), or NVDA's input help
+  (NVDA+1) to confirm the key reaches the system.
+- Where it happened: the plugin window or the host's parameter list (OSARA).
 
-3. **Старое сообщение «прилипло» к кнопке** (TEST103, TEST108).
-   Причина: анонсер записывал текст в description источника.
-   Исправление: не трогать description при анонсе; сообщения, не
-   относящиеся к элементу в фокусе, слать от метки статуса.
+## Silence
 
-4. **Ctrl+Shift+A не работает на Windows** (TEST114).
-   Причина: `isCtrlDown() && !isCommandDown()` — на Windows Ctrl = Command.
-   Исправление: убрать `!isCommandDown()`; добавить статическую проверку.
+- **NVDA says nothing when the plugin window opens, keys run REAPER actions:**
+  FOC-01, BLD-01, FOC-05, KEY-02.
+- **Silence after closing a screen, a dialog or a menu:** FOC-03, FOC-02, SPK-02.
+- **Silence on one element while others speak:** FOC-07, CTL-01, CTL-03, FOC-05.
+- **Results (loaded, saved, errors) never spoken:** SPK-05, SPK-02, SPK-10, SPK-11.
+- **Messages spoken with NVDA, silent with JAWS:** SPK-11.
+- **Silent after switching page or mode, old elements still read:** FOC-09, FOC-02.
 
-5. **Поиск по букве ломает стрелки** (TEST40).
-   Причина: сравнение кода клавиши с диапазоном печатных символов.
-   Исправление: для поиска брать `getTextCharacter()`.
+## Wrong voice or wrong text
 
-6. **Меню видно, но клавиатура и NVDA в REAPER** (Advanced после
-   предупреждения о библиотеке).
-   Причина: меню открыто, пока фокус у окна FX Chain.
-   Исправление: отложить открытие до `hasKeyboardFocus(true)` редактора.
+- **A different Windows voice (like Narrator) speaks, NVDA silent:** SPK-01.
+- **Phrase spoken twice, or cut off:** SPK-03, SPK-10, DLG-02.
+- **An old message is read again when returning to a button:** SPK-04.
+- **Slider read as a number or percent without units:** CTL-02.
+- **Garbage characters:** SPK-08.
+- **Too much talking (automation, meters, progress):** SPK-09.
+- **Two elements sound the same:** CTL-04.
+- **"Button" or "unknown" with no name:** CTL-01.
+- **Toggle always "not checked":** CTL-07.
+- **Menu announced only as "menu":** DLG-04.
 
-7. **Падение REAPER при Escape из поля точного ввода** (Bank Macro).
-   Причина: владелец TextEditor (Slider) прятался/перезаполнялся, пока поле
-   в фокусе. Исправление: применить → `hideTextBox` → `callAsync`.
+## Keyboard
 
-8. **Падение при закрытии редактора срезов по Escape.**
-   Причина: компонент удалялся внутри своего `keyPressed`.
-   Исправление: `MessageManager::callAsync(close)`.
+- **Keys trigger REAPER (record, transport, undo):** KEY-02, FOC-02, FOC-01, DLG-05.
+- **Ctrl shortcut does nothing on Windows (works on macOS):** KEY-01.
+- **A Shift+Alt (or Shift+Ctrl) shortcut runs the plain Alt action:** KEY-05.
+- **Arrows, Page keys or F-keys jump to random items; digits do not search:** KEY-06.
+- **Space does not start the DAW transport while the plugin has focus:** KEY-07.
+- **Context menu impossible without a mouse:** KEY-04, KEY-03.
+- **Some feature works only with the mouse:** KEY-03, CTL-03.
+- **A key acts twice:** KEY-11.
+- **Menu visible but keys and NVDA stay in REAPER:** DLG-05.
+- **Tab skips a button or escapes a dialog:** FOC-06.
+- **Cannot read an About or help text by line:** CTL-05.
 
-9. **Память курсора сбрасывается при повторном открытии окна** (TEST45).
-   Причина: конструктор редактора вызывал функцию «покинуть сетку», которая
-   сохраняла позицию по умолчанию. Исправление: сохранять позицию только
-   при настоящем выходе.
+## Stability
 
-10. **REAPER и NVDA зависают на 20 секунд при закрытии окна** (TEST104).
-    Причина: `getStateInformation` считал SHA-256 всех файлов синхронно.
-    Исправление: кеш хешей по пути/размеру/дате.
+- **REAPER crashes on Escape or when closing a screen:** RT-03, RT-04, RT-02.
+- **Crash when closing the plugin window during an operation:** RT-02, RT-06.
+- **REAPER and NVDA freeze for seconds when saving or closing:** PAR-07, RT-07.
+- **Crash or wrong reading after leaving a special mode:** RT-05.
+- **Clicks or dropouts while using the GUI:** RT-01.
 
-11. **«Скрытая» огибающая всё равно держит параметр** (TEST116).
-    Причина: REAPER VISIBLE=0 не выключает ACTIVE. Исправление: управлять
-    ACTIVE (и ARM, VISIBLE) через API REAPER; в других DAW использовать
-    только пункты активации, не Show/Hide.
+## Host parameters and automation
 
-12. **Ошибка компиляции `IReaperHostApplication_iid`** (TEST117).
-    Причина: `DEF_CLASS_IID` без `DECLARE_CLASS_IID`. Исправление: оба.
+- **Parameter list in REAPER or OSARA shows numbers or unclear names:** PAR-02.
+- **Automation recorded wrongly or not at all from the keyboard:** PAR-03, PAR-04.
+- **Old projects lose automation after an update:** PAR-01.
+- **"Auto" announced but nothing is automated, or a hidden envelope still controls the
+  value:** PAR-06, PAR-08.
+- **Automation is spoken while the project plays:** PAR-04, SPK-09.
 
-13. **Мусорные символы в интерфейсе** (TEST47).
-    Причина: не-ASCII литералы («—», «•») без UTF-8. Исправление: ASCII или
-    `String::fromUTF8`.
+## When the cause is not in the list
 
-14. **Пробел в плагине не запускает транспорт** (TEST50–51).
-    Причина: плагин съедал Space всегда. Исправление: по умолчанию Space —
-    DAW на главном экране, прослушивание — по переключателю Alt+P.
-
-15. **Пробел «Стоп» снова запускал звук** (TEST96).
-    Причина: состояние Play/Stop выводилось из того, играет ли голос (звук
-    уже кончился → «не играет» → старт). Исправление: явный флаг режима в
-    редакторе.
-
-16. **Навигация по шагам перезапускала звучащую фразу** (TEST38).
-    Исправление: при навигации только запоминать новую точку старта.
-
-17. **Свойства не читались NVDA** (TEST55).
-    Причина: панель была исключена из дерева доступности. Исправление:
-    именованный контейнер + реальные TextEditor только для чтения в фокусе.
-
-18. **Escape после диалога возвращал «куда-то»** (TEST108).
-    Исправление: помнить, открыто кнопкой или горячей клавишей; кнопкой —
-    вернуть на кнопку, клавишей — на текущий слот.
-
-19. **Текст только для чтения нельзя прочитать по словам и строкам.**
-    Причина: у read-only TextEditor скрыта каретка или стрелки уходят в DAW.
-    Как сделано в About LSampler-24: `setCaretVisible(true)`, стрелки,
-    Home/End, Page Up/Down обрабатываются внутри поля и не уходят в DAW.
-
-20. **Шумная озвучка смещений макро («-3»)** (TEST120).
-    Исправление: показывать итоговое значение с единицами и направление
-    смещения; «Mixed values», если слоты различаются.
-
-21. **NVDA читает ползунок процентами** (ToneTrace).
-    Исправление: текстовый интерфейс значения с единицами.
-
-22. **Плагин тормозит интерфейс, перестраивая всю сетку 10 раз в секунду**
-    (TEST58). Исправление: обновлять только при изменении ревизии и только
-    выбранную строку.
-
-23. **Прослушивание продолжает звучать после возврата в DAW** (TEST70).
-    Исправление: в таймере редактора следить за потерей фокуса окна и
-    останавливать все прослушивания; то же в деструкторе.
-
-24. **Одинаковые имена полос EQ после округления** (ToneTrace).
-    Исправление: увеличивать точность подписи, пока имена не станут
-    различимыми.
+1. Reproduce the path in code: key -> keyPressed entry point -> handler -> state
+   change -> what is spoken (announce / focus / value event) -> where focus ends.
+2. Run scripts/uia_inspect.ps1 -Mode Watch while the user (or you, with the
+   standalone build) repeats the steps: it lists every focus, name and value change.
+3. Add a new defect entry to audit-checklist.md once the cause is known.

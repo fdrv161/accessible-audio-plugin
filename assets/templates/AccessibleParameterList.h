@@ -1,26 +1,32 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <functional>
 #include <vector>
+#include "A11yKeys.h"
+#include "A11yParameters.h"
 #include "ScreenReaderAnnouncer.h"
 
-// Доступный редактор ВСЕХ параметров процессора одним фокусируемым элементом
-// (упрощённая модель «Сетка/Значение» из LSampler-24). Подходит как основа редактора
-// нового плагина или как «доступная вкладка» поверх недоступного GUI.
+// Accessible editor for ALL processor parameters as one focusable element (a simplified
+// "Grid / Value" model from LSampler-24). Use it as the main editor of a new plugin, or as
+// an "accessible page" on top of an inaccessible GUI (fastest retrofit).
 //
-// Клавиши:
-//   Вверх/Вниз            — параметр в группе (края тихие)
-//   Влево/Вправо          — предыдущая/следующая группа
-//   Home/End              — первый/последний в группе; Ctrl+Home/End — во всём списке
-//   Alt+Вверх/Вниз        — значение на шаг; Alt+Page Up/Down — крупный шаг
-//   Alt+Home/End          — максимум/минимум
-//   Backspace             — значение по умолчанию
-//   Enter                 — точный ввод текстом (Enter — применить, Escape — отмена)
-//   Буква / Shift+буква   — поиск параметра по первой букве вперёд/назад
-// Tab, Escape и пробел уходят родителю (переход фокуса, закрытие, транспорт DAW).
+// Keys:
+//   Up/Down              parameter within the group (edges are silent)
+//   Left/Right           previous/next group, keeping the row when possible
+//   Home/End             first/last in the group; Ctrl+Home/End: whole list
+//   Page Up/Down         8 rows within the group
+//   Alt+Up/Down          value by one step; Shift+Alt+Up/Down: fine step (continuous only)
+//   Alt+Page Up/Down     coarse step
+//   Alt+Home/End         maximum/minimum
+//   Backspace            default value
+//   Enter                exact entry (Enter applies, Escape cancels)
+//   letter / Shift+letter  search by the name the user hears, forward/backward
+//   Shift+F10 / Applications key  onContextMenu (e.g. host automation, MIDI learn)
+// Unused keys return false: the editor decides and consumes them (keyboard-model.md).
 //
-// Речь: при навигации — «Имя, значение», при изменении — только значение,
-// изменения от автоматизации не озвучиваются (их читает живой title по NVDA+Стрелка вверх).
+// Speech: navigation says "Name, value"; a value change says only the value; host
+// automation is never spoken (the live title answers NVDA+Up Arrow).
 class AccessibleParameterList : public juce::Component, private juce::Timer
 {
 public:
@@ -28,9 +34,12 @@ public:
     {
         juce::RangedAudioParameter* parameter = nullptr;
         juce::String group;
+        juce::String label; // spoken/searched name; empty = parameter->getName (128)
     };
 
-    // Собрать параметры из дерева процессора; группа — имя ближайшей подгруппы.
+    std::function<void (juce::RangedAudioParameter&)> onContextMenu;
+
+    // Collect parameters from the processor tree; group = nearest sub-group name.
     static std::vector<Entry> fromProcessor (juce::AudioProcessor& processor)
     {
         std::vector<Entry> result;
@@ -41,88 +50,93 @@ public:
     explicit AccessibleParameterList (std::vector<Entry> entriesToUse)
         : entries (std::move (entriesToUse))
     {
+        setName ("Parameters");
         setWantsKeyboardFocus (true);
-        setTitle ("Parameters");
 
-        // Поле точного ввода: обычный TextEditor, его читает любой скринридер.
-        addChildComponent (entry);
-        entry.setMultiLine (false);
-        entry.setSelectAllWhenFocused (true);
-        entry.onReturnKey = [this] { finishEntry (true); };
-        entry.onEscapeKey = [this] { finishEntry (false); };
-        entry.onFocusLost = [this] { if (entry.isVisible()) finishEntry (false); };
+        // Exact entry field: a plain TextEditor, readable by every screen reader.
+        addChildComponent (entryField);
+        entryField.setMultiLine (false);
+        entryField.setSelectAllWhenFocused (true);
+        entryField.setEscapeAndReturnKeysConsumed (true);
+        entryField.onReturnKey = [this] { finishEntry (true); };
+        entryField.onEscapeKey = [this] { finishEntry (false); };
+        entryField.onFocusLost = [this] { if (entryField.isVisible()) finishEntry (false); };
 
         startTimerHz (10);
+    }
+
+    juce::String nameOf (size_t index) const
+    {
+        const auto& e = entries[index];
+        return e.label.isNotEmpty() ? e.label : e.parameter->getName (128);
     }
 
     juce::String currentLine() const
     {
         if (entries.empty())
             return "No parameters";
-        auto* p = current();
-        return p->getName (128) + ", " + valueText (*p);
+        return nameOf ((size_t) cursor) + ", " + a11y::valueText (*current());
     }
 
     bool keyPressed (const juce::KeyPress& key) override
     {
-        if (entry.isVisible())
-            return true; // клавиши, которые не принял TextEditor, никуда не отдаём
+        if (entryField.isVisible())
+            return true; // keys the TextEditor did not take go nowhere
 
-        const auto mods = key.getModifiers();
-        const int code = key.getKeyCode();
-        const bool alt = mods.isAltDown() && ! mods.isCtrlDown() && ! mods.isShiftDown();
-        const bool ctrl = mods.isCtrlDown() && ! mods.isAltDown() && ! mods.isShiftDown();
-        const bool plain = ! mods.isAnyModifierKeyDown();
-
-        if (code == juce::KeyPress::tabKey || code == juce::KeyPress::escapeKey || code == juce::KeyPress::spaceKey)
-            return false;
         if (entries.empty())
+            return false;
+
+        using KP = juce::KeyPress;
+
+        // Value changes (Alt). Checked before plain navigation; each test matches the
+        // exact modifiers, so Shift+Alt+Up never runs the Alt+Up branch (TEST157).
+        if (a11y::is (key, KP::upKey,   false, true, true)) { step (1,  a11y::StepSize::fine);   return true; }
+        if (a11y::is (key, KP::downKey, false, true, true)) { step (-1, a11y::StepSize::fine);   return true; }
+        if (a11y::is (key, KP::upKey,       false, true))   { step (1,  a11y::StepSize::normal); return true; }
+        if (a11y::is (key, KP::downKey,     false, true))   { step (-1, a11y::StepSize::normal); return true; }
+        if (a11y::is (key, KP::pageUpKey,   false, true))   { step (1,  a11y::StepSize::coarse); return true; }
+        if (a11y::is (key, KP::pageDownKey, false, true))   { step (-1, a11y::StepSize::coarse); return true; }
+        if (a11y::is (key, KP::homeKey,     false, true))   { setNormalised (1.0f);    return true; }
+        if (a11y::is (key, KP::endKey,      false, true))   { setNormalised (0.0f);    return true; }
+
+        if (a11y::is (key, KP::homeKey, true)) { select (0); return true; }
+        if (a11y::is (key, KP::endKey,  true)) { select ((int) entries.size() - 1); return true; }
+
+        const int begin = groupBegin (cursor), end = groupEnd (cursor);
+        if (a11y::is (key, KP::upKey))        { if (cursor > begin) select (cursor - 1); return true; }
+        if (a11y::is (key, KP::downKey))      { if (cursor < end)   select (cursor + 1); return true; }
+        if (a11y::is (key, KP::homeKey))      { select (begin); return true; }
+        if (a11y::is (key, KP::endKey))       { select (end);   return true; }
+        if (a11y::is (key, KP::pageUpKey))    { select (juce::jmax (begin, cursor - 8)); return true; }
+        if (a11y::is (key, KP::pageDownKey))  { select (juce::jmin (end, cursor + 8));   return true; }
+        if (a11y::is (key, KP::leftKey))      { moveGroup (-1); return true; }
+        if (a11y::is (key, KP::rightKey))     { moveGroup (1);  return true; }
+        if (a11y::is (key, KP::returnKey))    { beginEntry(); return true; }
+        if (a11y::is (key, KP::backspaceKey)) { setNormalised (current()->getDefaultValue()); return true; }
+
+        if (a11y::isContextMenuKey (key))
+        {
+            if (onContextMenu)
+                onContextMenu (*current());
             return true;
-
-        // Изменение значения.
-        if (alt)
-        {
-            if (code == juce::KeyPress::upKey)       { step (1, false);  return true; }
-            if (code == juce::KeyPress::downKey)     { step (-1, false); return true; }
-            if (code == juce::KeyPress::pageUpKey)   { step (1, true);   return true; }
-            if (code == juce::KeyPress::pageDownKey) { step (-1, true);  return true; }
-            if (code == juce::KeyPress::homeKey)     { setNormalised (1.0f); return true; }
-            if (code == juce::KeyPress::endKey)      { setNormalised (0.0f); return true; }
-            // Alt+F4 должен закрывать окно как обычно; прочие Alt-комбинации не отдаём DAW.
-            return code != juce::KeyPress::F4Key;
         }
 
-        if (ctrl && code == juce::KeyPress::homeKey) { select (0); return true; }
-        if (ctrl && code == juce::KeyPress::endKey)  { select ((int) entries.size() - 1); return true; }
-
-        if (plain)
+        if (const auto initial = a11y::searchCharacter (key))
         {
-            const int begin = groupBegin (cursor), end = groupEnd (cursor);
-            if (code == juce::KeyPress::upKey)       { if (cursor > begin) select (cursor - 1); return true; }
-            if (code == juce::KeyPress::downKey)     { if (cursor < end)   select (cursor + 1); return true; }
-            if (code == juce::KeyPress::homeKey)     { select (begin); return true; }
-            if (code == juce::KeyPress::endKey)      { select (end);   return true; }
-            if (code == juce::KeyPress::pageUpKey)   { select (juce::jmax (begin, cursor - 8)); return true; }
-            if (code == juce::KeyPress::pageDownKey) { select (juce::jmin (end, cursor + 8));   return true; }
-            if (code == juce::KeyPress::leftKey)     { moveGroup (-1); return true; }
-            if (code == juce::KeyPress::rightKey)    { moveGroup (1);  return true; }
-            if (code == juce::KeyPress::returnKey)   { beginEntry(); return true; }
-            if (code == juce::KeyPress::backspaceKey){ setNormalised (current()->getDefaultValue()); return true; }
-        }
-
-        if (! mods.isCtrlDown() && ! mods.isAltDown() && ! mods.isCommandDown())
-        {
-            auto typed = key.getTextCharacter();
-            if (mods.isShiftDown() && ((code >= 'A' && code <= 'Z') || (code >= '0' && code <= '9')))
-                typed = (juce::juce_wchar) code; // Shift+цифра даёт «!», берём саму цифру
-            if (typed >= 33 && typed != 127)
+            const int direction = key.getModifiers().isShiftDown() ? -1 : 1;
+            const int found = a11y::findByInitial ((int) entries.size(), cursor, direction, initial,
+                                                   [this] (int i) { return nameOf ((size_t) i); });
+            if (found >= 0)
             {
-                searchByInitial (typed, mods.isShiftDown() ? -1 : 1);
-                return true;
+                if (entries[(size_t) found].group != entries[(size_t) cursor].group)
+                    selectWithGroup (found);
+                else
+                    select (found);
             }
+            return true;
         }
 
-        return true; // список владеет клавиатурой: Ctrl+Z, Ctrl+S и пр. не уходят в DAW
+        return false;
     }
 
     void paint (juce::Graphics& g) override
@@ -142,12 +156,12 @@ public:
 
     void resized() override
     {
-        entry.setBounds (getLocalBounds().reduced (6).removeFromBottom (28));
+        entryField.setBounds (getLocalBounds().reduced (6).removeFromBottom (28));
     }
 
     std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
     {
-        // Живой title: всегда «Имя, значение» на момент запроса, включая автоматизацию.
+        // Live title: always "Name, value" at the moment of the request, including automation.
         class LiveTitleHandler final : public juce::AccessibilityHandler
         {
         public:
@@ -169,20 +183,11 @@ private:
             if (auto* sub = node->getGroup())
                 collect (*sub, sub->getName(), out);
             else if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (node->getParameter()))
-                out.push_back ({ ranged, groupName });
+                out.push_back ({ ranged, groupName, {} });
         }
     }
 
     juce::RangedAudioParameter* current() const { return entries[(size_t) cursor].parameter; }
-
-    static juce::String valueText (juce::RangedAudioParameter& p)
-    {
-        auto text = p.getCurrentValueAsText().trim();
-        const auto unit = p.getLabel().trim();
-        if (unit.isNotEmpty() && ! text.endsWithIgnoreCase (unit))
-            text << " " << unit;
-        return text;
-    }
 
     int groupBegin (int index) const
     {
@@ -201,7 +206,7 @@ private:
     {
         index = juce::jlimit (0, (int) entries.size() - 1, index);
         if (index == cursor)
-            return; // край — тишина
+            return; // edge: silent
         cursor = index;
         repaint();
         a11y::announce (*this, currentLine());
@@ -209,18 +214,13 @@ private:
 
     void moveGroup (int direction)
     {
-        // Переходим в соседнюю группу, сохраняя номер строки, если он там есть.
+        // Into the neighbouring group, keeping the row number when that group has it.
         const int begin = groupBegin (cursor), end = groupEnd (cursor);
         const int row = cursor - begin;
         if (direction < 0 && begin > 0)
-        {
-            const int previousBegin = groupBegin (begin - 1);
-            selectWithGroup (juce::jmin (previousBegin + row, begin - 1));
-        }
+            selectWithGroup (juce::jmin (groupBegin (begin - 1) + row, begin - 1));
         else if (direction > 0 && end + 1 < (int) entries.size())
-        {
             selectWithGroup (juce::jmin (end + 1 + row, groupEnd (end + 1)));
-        }
     }
 
     void selectWithGroup (int index)
@@ -230,113 +230,61 @@ private:
         a11y::announce (*this, entries[(size_t) cursor].group + ". " + currentLine());
     }
 
-    void step (int direction, bool coarse)
+    void step (int direction, a11y::StepSize size)
     {
-        auto* p = current();
-        const auto& range = p->getNormalisableRange();
-        float next = p->getValue();
-
-        if (p->isDiscrete() || range.interval > 0.0f)
-        {
-            // Дискретные и с явным интервалом — шагаем в реальных единицах.
-            const float interval = range.interval > 0.0f ? range.interval : 1.0f;
-            const int steps = coarse ? juce::jmax (1, p->getNumSteps() / 10) : 1;
-            const float real = range.convertFrom0to1 (p->getValue()) + (float) (direction * steps) * interval;
-            next = range.convertTo0to1 (range.snapToLegalValue (juce::jlimit (range.start, range.end, real)));
-        }
-        else
-        {
-            // Непрерывные — в нормализованной шкале: учитывает логарифмический skew
-            // (у частоты среза шаг 1% одинаково удобен внизу и вверху диапазона).
-            next = juce::jlimit (0.0f, 1.0f, p->getValue() + (float) direction * (coarse ? 0.1f : 0.01f));
-        }
-        setNormalised (next);
+        setNormalised (a11y::steppedValue (*current(), direction, size));
     }
 
     void setNormalised (float normalised)
     {
-        auto* p = current();
-        const auto before = valueText (*p);
-        p->beginChangeGesture();
-        p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, normalised));
-        p->endChangeGesture();
+        const bool changed = a11y::setByUser (*current(), normalised);
         repaint();
-
-        const auto after = valueText (*p);
-        if (after != before)
-            a11y::announce (*this, after); // при изменении — только значение
+        if (changed)
+            a11y::announce (*this, a11y::valueText (*current())); // only the value; edge: silent
     }
 
     void beginEntry()
     {
         auto* p = current();
-        entry.setTitle (p->getName (128) + ", type value");
-        entry.setText (p->getCurrentValueAsText(), false);
-        entry.setVisible (true);
-        entry.grabKeyboardFocus();
-        entry.selectAll();
+        entryField.setTitle (nameOf ((size_t) cursor) + ", type a value");
+        entryField.setText (p->getCurrentValueAsText(), false);
+        entryField.setVisible (true);
+        entryField.grabKeyboardFocus();
+        entryField.selectAll();
     }
 
     void finishEntry (bool apply)
     {
-        const auto text = entry.getText();
-        // Прячем поле и возвращаем фокус асинхронно: этот вызов приходит из keyPressed поля.
+        const auto text = entryField.getText();
+        // Hide the field and return focus asynchronously: this runs inside the field's own
+        // key handling, and hiding a focused component there can crash hosts (RT-04).
         juce::MessageManager::callAsync ([safeThis = juce::Component::SafePointer<AccessibleParameterList> (this), text, apply]
         {
-            if (safeThis == nullptr || ! safeThis->entry.isVisible())
+            if (safeThis == nullptr || ! safeThis->entryField.isVisible())
                 return;
-            safeThis->entry.setVisible (false);
+
+            bool valid = true;
+            if (apply)
+            {
+                float normalised = 0.0f;
+                valid = a11y::parseTypedValue (*safeThis->current(), text, normalised);
+                if (valid) // silent: the focus speech below already reads "Name, new value"
+                    a11y::setByUser (*safeThis->current(), normalised);
+            }
+
+            // Focus first, then hide the field: never hide the focused component (FOC-02).
             safeThis->grabKeyboardFocus();
             if (auto* handler = safeThis->getAccessibilityHandler())
-                handler->grabFocus();
-            if (! apply)
-                return;
-            float normalised = 0.0f;
-            if (parseEntry (*safeThis->current(), text, normalised))
-                safeThis->setNormalised (normalised);
-            else
-                a11y::announce (*safeThis, "Invalid value: " + text.trim(), a11y::SpeechQueue::keepAll);
+                handler->grabFocus(); // force the UIA focus event (REAPER sometimes misses it)
+            safeThis->entryField.setVisible (false);
+            safeThis->repaint();
+
+            if (! valid)
+                safeThis->announcer.say ("Invalid value: " + text.trim() + ". Type a number or an option name.");
         });
     }
 
-    // getValueForText на мусорном тексте молча вернёт 0 (или первый вариант списка).
-    // Принимаем только число или точную подпись варианта.
-    static bool parseEntry (juce::RangedAudioParameter& p, const juce::String& text, float& normalised)
-    {
-        const auto t = text.trim();
-        if (t.isEmpty())
-            return false;
-        const float candidate = p.getValueForText (t);
-        const bool numeric = t.containsAnyOf ("0123456789");
-        const bool label = p.getText (candidate, 128).trim().equalsIgnoreCase (t);
-        if (! numeric && ! label)
-            return false;
-        normalised = juce::jlimit (0.0f, 1.0f, candidate);
-        return true;
-    }
-
-    void searchByInitial (juce::juce_wchar initial, int direction)
-    {
-        const int count = (int) entries.size();
-        const auto target = juce::CharacterFunctions::toLowerCase (initial);
-        for (int distance = 1; distance <= count; ++distance)
-        {
-            int index = (cursor + direction * distance) % count;
-            if (index < 0)
-                index += count;
-            const auto name = entries[(size_t) index].parameter->getName (128);
-            if (name.isNotEmpty() && juce::CharacterFunctions::toLowerCase (name[0]) == target)
-            {
-                if (entries[(size_t) index].group != entries[(size_t) cursor].group)
-                    selectWithGroup (index);
-                else
-                    select (index);
-                return;
-            }
-        }
-    }
-
-    // Автоматизация хоста меняет значения: перерисовываем, но не говорим.
+    // Host automation changes values: repaint, but never speak.
     void timerCallback() override
     {
         if (isShowing() && currentLine() != lastPaintedLine)
@@ -346,13 +294,21 @@ private:
     std::vector<Entry> entries;
     int cursor = 0;
     juce::String lastPaintedLine;
-    juce::TextEditor entry;
+    juce::TextEditor entryField;
+    a11y::Announcer announcer { *this }; // delayed: speaks after the focus-change speech
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AccessibleParameterList)
 };
 
-// Использование в редакторе плагина:
+// Use in the plugin editor:
 //   list = std::make_unique<AccessibleParameterList> (AccessibleParameterList::fromProcessor (processor));
 //   addAndMakeVisible (*list);
-//   // в конструкторе редактора после setSize — фокус на список:
-//   juce::MessageManager::callAsync ([safe = SafePointer<Editor> (this)] { if (safe) safe->list->grabKeyboardFocus(); });
+//   // after setSize() in the editor constructor, focus the list once the window is on screen:
+//   juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<Editor> (this)]
+//   {
+//       if (safe != nullptr && safe->list->isShowing())
+//       {
+//           safe->list->grabKeyboardFocus();
+//           if (auto* h = safe->list->getAccessibilityHandler()) h->grabFocus();
+//       }
+//   });

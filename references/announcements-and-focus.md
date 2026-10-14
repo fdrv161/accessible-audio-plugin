@@ -1,171 +1,163 @@
-# Озвучка и фокус
+# Speech and focus
 
-Содержание: 1. Каналы речи. 2. Title, name, description, help. 3. Что и как
-говорить. 4. Перенос фокуса. 5. Приёмы для NVDA в REAPER. 6. Частота и
-дедупликация.
+Contents: 1. Speech channels. 2. Title, description, help. 3. What to say.
+4. Moving focus. 5. REAPER and NVDA specifics. 6. Rate and duplicates.
 
-## 1. Каналы речи
+## 1. Speech channels
 
-Скринридер узнаёт о происходящем тремя способами:
+A screen reader learns about the plugin in three ways. Use the first one that fits;
+use only one per event.
 
-1. **Смена фокуса.** Элемент получил фокус — скринридер сам прочитает его
-   имя, роль, значение и описание. Это самый надёжный и «бесплатный» способ.
-2. **Изменение значения/выделения у элемента в фокусе.** Например, ComboBox
-   поменял выбранный пункт — NVDA прочитает новый пункт.
-3. **Явное уведомление** — для результатов действий, которых не видно через
-   фокус («Bank loaded», «Step 5», «Preview On»).
+1. **Focus change.** The newly focused element is read automatically: name, role,
+   value, description. Free and the most reliable.
+2. **Value or state change of the focused element.** A JUCE Slider, ToggleButton,
+   ComboBox, or a custom handler that raises
+   `notifyAccessibilityEvent(AccessibilityEvent::valueChanged)`. The screen reader reads
+   the new value (or "checked") by itself.
+3. **Explicit announcement.** For what no focus or value change shows: results
+   ("Bank loaded"), modes ("Preview On"), rows of a virtual list cell, errors.
 
-### Явное уведомление на Windows
+### Explicit announcements on Windows
 
-Правильный путь — `UiaRaiseNotificationEvent` на провайдере UIA реального
-элемента окна плагина: элемента в фокусе или видимой строки состояния. Его
-слышат NVDA, JAWS и Экранный диктор. Готовая реализация:
-`assets/templates/ScreenReaderAnnouncer.cpp`.
+Use `a11y::announce` / `a11y::Announcer` from templates/ScreenReaderAnnouncer.
 
-- Источник события должен быть **в дереве доступности**: видимым и не
-  исключённым через `setAccessible(false)`. Иначе NVDA не сможет связать
-  событие с окном и промолчит.
-- Если источник — элемент в фокусе, сообщение звучит естественно. Если
-  сообщение не про текущий элемент (например «Loop Off», сказанное, пока
-  фокус на кнопке), шли его от постоянной метки статуса, чтобы не трогать
-  свойства сфокусированного элемента.
-- Режим обработки: `ImportantMostRecent` для потока однотипных сообщений
-  (значение крутится — каждое новое прерывает старое), `ImportantAll` для
-  того, что нельзя потерять (ошибка, итог операции).
+- It raises a UI Automation notification from a hidden 1x1 child window of the editor
+  that exists only for that (the technique of OSARA and Surge XT). It does not depend on
+  which element has focus, never changes a title or description, and the window never
+  appears in navigation.
+- NVDA and Narrator read UIA notifications. NVDA reads them only while the focus is in
+  the same application (plugin window focused, or REAPER focused for an in-process
+  plugin); a plugin running in a separate host process is silent while focus is in
+  the host.
+- JAWS and Dolphin ignore UIA notifications (OSARA's finding). The template detects them
+  and uses OSARA's fallback: the text becomes the MSAA name of the focused window for
+  a moment. Not yet verified inside JUCE windows: test with JAWS before promising it.
+- `Speech::interrupt` (NotificationProcessing_MostRecent): new text replaces pending
+  text; for navigation and values. `Speech::queue` (NotificationProcessing_All): queued
+  after current speech; for results and errors.
+- `Announcer::say` waits ~150 ms and queues: use it for a result that comes together
+  with a focus move (screen readers cancel speech on focus change, so an earlier
+  message would be lost). `sayLatest` coalesces fast repeats (key held down).
 
-**Нельзя:** `juce::AccessibilityHandler::postAnnouncement` на Windows. В JUCE
-(проверено по исходникам `juce_Accessibility_windows.cpp`, вплоть до ветки
-master) эта функция не отправляет событие UIA, а произносит текст через
-синтезатор SAPI (`ISpVoice`). Пользователь слышит отдельный голос Windows,
-похожий на Экранный диктор, с другой скоростью и громкостью, а NVDA и JAWS
-ничего не говорят и не выводят на брайлевский дисплей. Именно эту проблему
-замечали в ToneTrace.
+**Never on Windows:** `juce::AccessibilityHandler::postAnnouncement`. JUCE speaks it with
+SAPI (ISpVoice): a separate voice with its own speed and volume, invisible to NVDA, JAWS
+and braille (defect SPK-01). On macOS it is the right call (VoiceOver), and the template
+uses it there. JUCE has no screen reader support on Linux.
 
-На macOS `postAnnouncement` работает с VoiceOver нормально — шаблон
-анонсера использует его только там. В Linux у JUCE нет поддержки
-скринридеров.
+**Avoid:** raising the notification from a JUCE component's own provider
+(`getNativeImplementation`), the older approach: silent when that component is hidden or
+not accessible, and it relies on JUCE internals (SPK-02).
 
-### Нельзя смешивать каналы
+## 2. Title, description, help
 
-Если одновременно послать `notifyAccessibilityEvent(titleChanged)` и явное
-уведомление, или анонс и смену фокуса с тем же текстом, NVDA произнесёт
-фразу дважды или обрежет одну другой. В LSampler-24 это было исправлено
-несколько раз: «Mixing titleChanged with the explicit announcer caused
-consecutive overlapping messages». Правило: при переходе фокуса ничего не
-анонсируй дополнительно — фокус сам всё скажет.
+- **title** (`setTitle`, or `getTitle()` in a custom handler): what NVDA calls the
+  name, read on focus and by NVDA+Up Arrow. Short, current state: "Slot 3, Kick",
+  "Cutoff, 1200 Hz, Auto".
+- **name** (`setName`): internal JUCE name, not read by screen readers (buttons fall back
+  to their button text). Do not rely on it for accessibility.
+- **description** (`setDescription`): read after name and role. Use it for the
+  shortcut only: "Load Sample, button, Alt+O". Never for messages: they would be read
+  every time focus returns (SPK-04).
+- **help** (`setHelpText`): long key help; NVDA does not always read it. Duplicate
+  important keys in the spoken short help (F1) and the HTML manual.
 
-## 2. Title, name, description, help
+### Live title
 
-- **title** (`setTitle`) — то, что NVDA называет именем элемента и читает по
-  NVDA+Стрелка вверх. Делай его короткой текущей строкой: «Slot 3, Kick»,
-  «Cutoff, 1200 Hz, Auto».
-- **name** (`setName`) — в JUCE это внутреннее имя компонента; если title
-  пуст, JUCE может использовать name. Держи их согласованными или очищай
-  name, чтобы не было двойного чтения.
-- **description** (`setDescription`) — читается после имени и роли. Лучшее
-  место для горячей клавиши кнопки: «Load Sample, кнопка, Alt+O». Не клади
-  туда временные сообщения: они будут звучать при каждом возврате на
-  элемент. (В LSampler-24 старый анонсер писал сообщение в description, и
-  «Loop On» прилипал к кнопке — пришлось чистить description после каждого
-  анонса.)
-- **help text** (`setHelpText`) — длинная инструкция по клавишам. NVDA читает
-  её не всегда; дублируй важное в справке (F1/F4) и в HTML-руководстве.
+When the text changes on its own (host automation, playback position), do not update
+the title on a timer. Give the component its own AccessibilityHandler whose
+`getTitle()` computes the text on every request (AccessibleListCell,
+AccessibleParameterList). NVDA+Up Arrow then always reads the current value, with no
+extra events.
 
-### Живой title
+### Slider values
 
-Если строка меняется (значение автоматизируется хостом), не обновляй title
-по таймеру. Создай свой `AccessibilityHandler`, у которого `getTitle()`
-вычисляет строку при каждом запросе (так сделан Slice Editor и шаблон
-`AccessibleListCell.h`). Тогда NVDA+Стрелка вверх всегда читает актуальное
-значение, а лишних событий нет.
+A plain `juce::Slider` exposes a UIA Value (text from `getTextFromValue`) and a
+RangeValue (number). Current NVDA prefers the text; other screen readers and old NVDA
+versions may read the number or a percentage. For values with units ("+3 dB",
+"1.2 kHz", "C sharp 4") expose a text-only value: TextValueSlider.h or
+ParameterOverlay. At minimum set `textFromValueFunction` with units.
 
-### Значения ползунков
+## 3. What to say
 
-Стандартный `juce::Slider` отдаёт UIA числовой диапазон, и некоторые
-скринридеры читают его как проценты или голое число. Если у значения есть
-единицы («+3 dB», «1.2 kHz», «C sharp 4»), отдавай текстовое значение через
-`AccessibilityTextValueInterface` (шаблон `TextValueSlider.h`) или используй
-список-ячейку, где значение — часть строки.
+- **Order:** the important word first. "Cutoff, 1200 Hz", not "The filter parameter
+  Cutoff has the value of 1200 hertz".
+- **Navigation:** "Name, value". **Value change:** only the value.
+  **Context change** (slot, page, mode): context + current row ("Slot 4, Snare. Level,
+  -3 dB"; "F2, Sample Parameters. Velocity Low, 1").
+- **Entering a screen:** focus speaks the element; add at most one short context phrase
+  that the element does not say ("5 loaded slots").
+- **Numbers:** no trailing zeros ("10%"); a sign for bipolar values ("+3 dB"); units
+  that sound right; notes as "60 C 4", "61 C sharp 4" (never "#"); tempo sync as
+  "1 bar", "eighth triplet".
+- **Options:** by label ("Round Robin"), never by index.
+- **Mixed state:** honestly, "Mixed values, increase by 3 dB".
+- **No role words:** never "button", "checkbox", "selected item"; the screen reader adds
+  roles.
+- **ASCII or explicit UTF-8:** no "—", "•", "×" without `juce::String::fromUTF8`
+  (SPK-08). A hyphen and commas sound better anyway.
+- **Errors:** what happened and what to do. "Library unavailable: D:\Library. Connect
+  the drive, or choose the Library Folder in Advanced."
+- **Dangerous confirmations** name what will be lost: "Slot 3, Kick, is occupied.
+  Replace it with Snare? Press Y or N."
+- **Plugin language:** spoken strings in English unless the plugin is localised; keep
+  them short and consistent across screens.
 
-## 3. Что и как говорить
+## 4. Moving focus
 
-- **Порядок:** главное в начале. «Cutoff, 1200 Hz», а не «Параметр фильтра
-  Cutoff имеет значение 1200 герц».
-- **Навигация:** «Имя, значение». **Изменение значения:** только значение.
-  **Смена контекста** (слот, страница, режим): контекст + текущая строка
-  («Slot 4, Snare. Level, -3 dB»; «F2, Sample Parameters. Velocity Low, 1»).
-- **Вход в экран:** одна вводная фраза с контекстом и первой строкой
-  («Bank Macro Grid. 5 loaded slots. Relative. Level, 0 dB»).
-- **Числа:** убирай лишние нули («10%», не «10.00%»), знак у
-  двунаправленных величин («+3 dB»), единицы словами, понятными на слух.
-  Ноты — «60 C 4», «61 C sharp 4» (не «C#»: символ # синтезаторы читают по-
-  разному). Синхронизация LFO — «1 bar», «eighth triplet».
-- **Варианты (enum)** — всегда подписью («Round Robin»), не индексом.
-- **Неоднозначное состояние** — честно: «Mixed values, increase by 3 dB».
-- **Без ролей и служебных слов:** не пиши «button», «checkbox», «selected
-  item» — скринридер добавит роль сам.
-- **Только ASCII или явный UTF-8.** Не вставляй в строки «—», «•», «×» без
-  `juce::String::fromUTF8` / `CharPointer_UTF8`: в LSampler-24 такие символы
-  после сборки выводились мусором. Простой дефис и запятая звучат лучше.
-- **Ошибки:** что случилось и что сделать. «Library unavailable: D:\…\Library.
-  Connect the drive, or choose the Library Folder in Advanced.»
-- **Подтверждения опасных действий** называют, что будет потеряно: «Slot 3,
-  Kick, is occupied. Replace it with Snare? Press Y or N.»
-
-## 4. Перенос фокуса
-
-Базовый рецепт, проверенный в REAPER:
+Recipe proven in REAPER:
 
 ```cpp
-juce::AccessibilityHandler::clearCurrentlyFocusedHandler(); // если фокус может уже быть "там же"
+juce::AccessibilityHandler::clearCurrentlyFocusedHandler(); // only if focus may already "be" there
 target.grabKeyboardFocus();
 if (auto* h = target.getAccessibilityHandler())
-    h->grabFocus();   // гарантирует событие фокуса UIA, даже если JUCE считает, что фокус не менялся
+    h->grabFocus(); // guarantees the UIA focus event even if JUCE thinks nothing changed
 ```
 
-Правила:
+Rules:
+- Move focus to the new place BEFORE hiding or disabling the focused component
+  (FOC-02).
+- Remember where focus came from (`SafePointer<Component> returnFocus`). Return to the
+  button if a button opened the screen, to the main element (current slot) if a hotkey
+  did (LSampler-24 TEST108). Check `isShowing() && isEnabled()`; otherwise use a fallback.
+- Move focus after opening or closing a screen asynchronously
+  (`MessageManager::callAsync` or `Timer::callAfterDelay(50, ...)`), always with a
+  SafePointer, so JUCE and the host finish their own focus change first.
+- Initial focus when the editor opens: after it is showing, never in the constructor
+  (FOC-04).
+- When focus leaves the plugin window (user back in the DAW), stop all previews: watch
+  `hasKeyboardFocus(true)` of the editor in its timer (FOC-08).
+- After rebuilding a container's children, raise `structureChanged` on it one tick
+  later (FOC-09).
+- Debugging: register a `juce::FocusChangeListener` with
+  `juce::Desktop::getInstance().addFocusChangeListener(this)` and log every change
+  (component title, type, whether it has an accessibility handler), as Surge XT does in
+  its debug mode; or use scripts/uia_inspect.ps1 -Mode Watch.
 
-- Перед скрытием компонента, у которого фокус, переведи фокус на новое место.
-  Скрытый сфокусированный элемент = NVDA молчит, клавиши уходят в DAW.
-- Запоминай, откуда пришли (`SafePointer<Component> returnFocus`), и
-  возвращай туда при закрытии. Если экран открыт горячей клавишей, разумная
-  цель возврата — главный элемент (текущий слот), а если кнопкой — эта
-  кнопка (так сделано в LSampler-24, TEST108).
-- Проверяй цель возврата: `isShowing() && isEnabled()`; иначе — запасной
-  вариант.
-- Переход фокуса после закрытия/открытия экрана делай с небольшой задержкой
-  (`Timer::callAfterDelay(50…60, …)` или `MessageManager::callAsync`), чтобы
-  JUCE и хост закончили собственную смену фокуса. Всегда через `SafePointer`.
-- Фокус ушёл из окна плагина (пользователь вернулся в DAW) — остановить все
-  прослушивания: в таймере редактора отслеживай `hasKeyboardFocus(true)`.
+## 5. REAPER and NVDA specifics
 
-## 5. Приёмы для NVDA в REAPER
+- **Deferred grabFocus.** In `focusGained` of the main grid, a 1 ms deferred
+  `getAccessibilityHandler()->grabFocus()` made REAPER pass UIA focus into the plugin
+  reliably (LSampler-24).
+- **Mode name on entry (hack).** LSampler-24's grid briefly sets the title "Grid" (or
+  "Value. Cutoff") on focus so NVDA announces the mode, then about 200 ms later the
+  compact title "Cutoff, 1200 Hz" for row reading. Use only if users want the mode name.
+- **Menus from the FX chain window.** A PopupMenu opened while REAPER's FX chain list has
+  keyboard focus is visible, but keys and NVDA stay in REAPER. Defer opening until the
+  editor `hasKeyboardFocus(true)` (DLG-05).
+- **Menu window name.** Override `preparePopupMenuWindow` in your LookAndFeel and call
+  `window.setTitle("Choose Help language")`; otherwise NVDA says just "menu".
+- **Space.** On the main screen return false for Space so the DAW transport works
+  (KEY-07).
+- **"Send all keyboard input to plug-in"** (REAPER FX window option) helps when REAPER
+  still grabs keys; mention it in the plugin help.
 
-- **Двойной заголовок при входе.** Сетка параметров в LSampler-24 при
-  получении фокуса на мгновение ставит title «Grid» (или «Value. Cutoff»),
-  чтобы NVDA объявил режим, а через ~200 мс возвращает компактный title
-  «Cutoff, 1200 Hz» для чтения строки. Это хак: применяй, только если
-  пользователю важно слышать название режима при входе.
-- **Отложенный grabFocus.** В `focusGained` сетки через 1 мс вызывается
-  `getAccessibilityHandler()->grabFocus()` — без этого REAPER иногда не
-  передавал UIA-фокус в плагин.
-- **Меню из окна FX Chain.** Если открыть `PopupMenu`, пока клавиатурный
-  фокус у списка FX Chain в REAPER, меню видно, но клавиатура и NVDA остаются
-  в REAPER. Откладывай открытие, пока `hasKeyboardFocus(true)` редактора не
-  станет истинным.
-- **Имя всплывающего меню.** Задай имя окна меню через свой LookAndFeel:
-  переопредели `preparePopupMenuWindow` и вызови там
-  `window.setTitle("Choose Help language")`. Иначе NVDA скажет просто «меню».
-- **Пробел.** На главном экране отдай Space в DAW (`return false`), иначе
-  пользователь не сможет запустить транспорт, пока фокус в плагине.
+## 6. Rate and duplicates
 
-## 6. Частота и дедупликация
-
-- Не говори одно и то же дважды подряд (держи `lastAnnouncement`).
-- Прогресс долгих операций — не чаще раза в 4 секунды и только когда фокус в
-  плагине; между сообщениями актуальный процент читается из title метки
-  статуса по NVDA+Стрелка вверх.
-- Автоматизация хоста и метры не озвучиваются вообще: значения доступны по
-  запросу (живой title, свойства).
-- Телеметрию (уровни, анализ) обновляй в видимом тексте с ограничением
-  частоты, пока поле в фокусе, и не анонсируй каждое изменение.
+- Do not repeat the same text twice in a row for status and telemetry
+  (`Announcer::sayIfChanged`). A user's repeated key press may repeat the phrase.
+- Progress of long operations: at most every 4 seconds, only while focus is in the
+  plugin; the current percent is always in the status element's title (NVDA+Up Arrow).
+- Host automation and meters are never announced; their values are available on
+  demand (live title, properties).
+- Telemetry shown as text (levels, analysis) is updated with a rate limit while focused,
+  never announced per change.
