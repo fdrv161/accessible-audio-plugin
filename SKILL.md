@@ -181,7 +181,8 @@ compiler here): build them in the project and fix small differences for its JUCE
 - `threading-realtime.md`: audio thread, background jobs, safe async calls, lifetime.
 - `build-vst3-clap.md`: CMake, Projucer, CLAP, CI, local build.
 - `testing.md`: key routing tests, static checks, uia_inspect, keyboard diagnostic,
-  focus log, manual plan, note and bug report templates.
+  focus log, manual plan, note and bug report templates, how to read NVDA developer
+  info (ask the user to paste it for any silent or wrongly read element).
 
 ## Facts that expire
 

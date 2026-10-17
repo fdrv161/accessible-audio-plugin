@@ -193,5 +193,27 @@ Ask for (from ToneTrace, extended):
 - screen reader and version, OSARA version;
 - plugin window or host parameter list;
 - steps, what they expected to hear, what they heard (Speech Viewer text);
-- for a wrong element: NVDA+F1 developer info from the NVDA log;
+- for a wrong or silent element: NVDA developer info, pasted as text (below);
 - if possible, a uia_inspect.ps1 Watch log of the same steps.
+
+### NVDA developer info
+
+The fastest exact description of one element, as NVDA itself understands it.
+- How: NVDA command "Copies developer info for the navigator object to the clipboard"
+  (Input gestures, Tools category; unassigned by default). Before pressing it, move the
+  navigator to the focus (NVDA+Numpad Minus, laptop layout NVDA+Backspace), or the info
+  describes another object. Fallback: NVDA+F1 shows the same text in the NVDA log.
+- It shows what uia_inspect.ps1 cannot: the description (`setDescription`) and NVDA's own
+  interpretation (role, states). It does not show announcements: use Speech Viewer.
+- Read these fields first:
+  - `name`: empty means CTL-01; an old message here means SPK-04 (title);
+  - `role` and `states`: unexpected role, missing "focusable", "checked" never present
+    (CTL-07), "invisible" or "unavailable" on the focused element (FOC-02);
+  - `value`: a bare number instead of "-3 dB" means CTL-02;
+  - `description`: anything except the shortcut means SPK-04;
+  - `windowClassName`: starts with `JUCE_` inside a JUCE editor; another class means
+    focus is in the host, not the plugin (FOC-01, DLG-05);
+  - UIA lines (patterns, provider description, class name): Value without RangeValue is
+    what the text-value templates produce; RangeValue only means number-only values.
+- Ask for two dumps when behaviour changes (before and after the key press): the
+  difference usually shows the defect.

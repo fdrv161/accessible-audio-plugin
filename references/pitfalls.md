@@ -11,8 +11,12 @@ Ask the user (blind users can do all of this with the keyboard):
 - Screen reader and version; OSARA version if REAPER.
 - Exact steps, what they expected to hear, what they heard. NVDA's Speech Viewer
   (NVDA menu, Tools, Speech Viewer) shows the exact spoken text to copy.
-- For a silent or wrong element: NVDA+F1 on it opens the NVDA log with developer
-  info (role, name, value, UIA patterns, class name); copy the last block.
+- For a silent or wrong element: NVDA's command "Copies developer info for the
+  navigator object to the clipboard" (NVDA menu, Preferences, Input gestures, Tools;
+  no key by default, ask the user to assign one). Focus the element, make sure the
+  navigator follows focus (NVDA+Numpad Minus moves it to focus), press the key, paste
+  the text into the chat. Fallback: NVDA+F1 opens the same info in the NVDA log.
+  How to read it: testing.md section 8.
 - For keys: the plugin's keyboard diagnostic mode (testing.md), or NVDA's input help
   (NVDA+1) to confirm the key reaches the system.
 - Where it happened: the plugin window or the host's parameter list (OSARA).
